@@ -1,0 +1,88 @@
+---
+name: Bump Version
+
+"on":
+  push:
+    branches: ['main']
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: Cut a prerelease of this kind instead of a full release
+        required: false
+        default: none
+        type: choice
+        options: [none, alpha, beta, rc]
+
+# Two runs on one push (a duplicate webhook delivery is enough) both compute the
+# same next version, and the loser fails pushing a tag that already exists.
+# Queue instead of cancelling: a cancelled run can leave the bump commit pushed
+# without its tag.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bump-version:
+    # Ignore the commits from this action
+    if: "!startsWith(github.event.head_commit.message, 'bump:')"
+    runs-on: ubuntu-latest
+    name: Bump version and make release with commitizen
+    # Fix 403 error (https://github.com/softprops/action-gh-release/issues/400)
+    permissions:
+      contents: write
+    outputs:
+      released: ${{ steps.bump.outputs.released }}
+      version: ${{ steps.bump.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Bump version and generate changelog
+        uses: commitizen-tools/commitizen-action@338bbd841b75aaee6bf5340e1fa12f6ab58ff9ff # master
+        with:
+          branch: main
+          changelog_increment_filename: body.md
+          # Resolves to empty on push events and on the "none" choice, which
+          # commitizen reads as a full release. The condition is written this way
+          # because an expression whose middle operand is falsy falls through to
+          # the right-hand side.
+          prerelease: ${{ inputs.prerelease != 'none' && inputs.prerelease || '' }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      # REVISION == PREVIOUS_REVISION means commitizen found no bumpable commits
+      # and cut no tag, so there is nothing to release.
+      - name: Record whether a release was cut
+        id: bump
+        run: |
+          if [ "$REVISION" = "$PREVIOUS_REVISION" ]; then
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "released=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$REVISION" >> "$GITHUB_OUTPUT"
+          # commitizen reports a bare version and writes the tag through its own
+          # tag_format, so read the tag back rather than reconstructing the prefix.
+          echo "tag=$(git tag --points-at HEAD | head -n1)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.bump.outputs.released == 'true'
+        with:
+          go-version-file: go.mod
+
+      # Runs in the same workflow because tags pushed with GITHUB_TOKEN do not
+      # trigger other workflows, so a separate on-tag release workflow never fires.
+      - name: Build release binaries and publish release
+        if: steps.bump.outputs.released == 'true'
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean --release-notes body.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Deploy key for the Homebrew tap push. Unset until
+          # scripts/provision-tap-deploy-key.sh has been run, which goreleaser
+          # treats as "skip the tap" rather than as a failure.
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}

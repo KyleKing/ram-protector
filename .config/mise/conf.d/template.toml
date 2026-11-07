@@ -1,0 +1,163 @@
+[tasks.bench]
+description = "Run benchmarks"
+run = "go test -bench=. -benchmem -run=^$ ./..."
+
+[tasks.build]
+description = "Build binary"
+run = "go build -v -o ram-protector ./cmd/ram-protector"
+
+[tasks.ci]
+description = "Run all checks (used in GitHub Actions)"
+run = [
+  "go test -v -coverprofile=coverage.out ./...",
+  "go build -v -o ram-protector ./cmd/ram-protector",
+]
+
+[tasks."verify-released"]
+description = "Build and test ignoring any go.work, the way CI sees the module"
+# A go.work makes a sibling checkout win over the version go.mod pins, so local
+# green says nothing about whether the released dependency actually works. CI has
+# no workspace, so this is the only local check that matches it. With no go.work
+# at all the dependency set is already the released one, so the task is a no-op
+# and skips itself rather than running the suite a second time.
+env = { GOWORK = "off" }
+shell = "bash -c"
+run = '''
+if [ ! -f go.work ]; then
+  echo "no go.work; the released dependency set is what ci already ran"
+  exit 0
+fi
+go build ./...
+go test ./...
+'''
+
+[tasks.clean]
+description = "Clean build artifacts"
+run = "rm -f coverage.out"
+
+[tasks.demo]
+description = "Generate VHS demo recordings"
+run = 'find . -name "*.tape" -not -name stills.tape -not -path "./.git/*" -exec vhs {} \;'
+depends = ["build"]
+
+# STILLS_BREAKPOINTS is "name=WIDTHxHEIGHT" pairs in pixels. VHS falls back to a
+# wide-spaced font when STILLS_FONT is not installed (Menlo ships with macOS).
+[tasks."demo:stills"]
+description = "Render still PNGs per breakpoint from demo/stills.tape"
+depends = ["build"]
+shell = "bash -c"
+run = '''
+set -euo pipefail
+breakpoints=${STILLS_BREAKPOINTS:-"wide=1180x700 narrow=700x700"}
+font=${STILLS_FONT:-Menlo}
+dir=$(mktemp -d)
+trap 'rm -rf "$dir"' EXIT
+mkdir -p demo/.work docs/images
+for bp in $breakpoints; do
+  name=${bp%%=*}
+  size=${bp#*=}
+  sed -e "s/__NAME__/$name/g" -e "s/__WIDTH__/${size%x*}/g" -e "s/__HEIGHT__/${size#*x}/g" \
+    -e "s/__FONT__/$font/g" demo/stills.tape > "$dir/$name.tape"
+  vhs "$dir/$name.tape"
+done
+'''
+
+[tasks.dev]
+description = "Run from source (always reflects current code, no stale build)"
+run = "go run ./cmd/ram-protector"
+raw_args = true
+
+[tasks.format]
+description = "Format code with golangci-lint and golines"
+run = ["golangci-lint run --fix ./...", "golines -w -m 120 ."]
+
+[tasks.hooks]
+description = "Run git hooks"
+run = "hk fix --quiet"
+
+[tasks.lint]
+description = "Run linter"
+run = "golangci-lint run ./..."
+raw_args = true
+
+[tasks.test]
+description = "Run tests with coverage"
+run = "go test -coverprofile=coverage.out ./..."
+raw_args = true
+
+# `go test -cover` instruments the test binary, so a test that drives the built
+# binary reads as 0% however much it exercises. A TestMain that builds the child
+# with `go build -cover` and passes it GOCOVERDIR=$COVERDIR_SUBPROCESS puts that
+# half back. A project with no such test writes nothing there and the merge is a
+# no-op, so this is correct either way.
+[tasks."test:coverage-min"]
+description = "Verify minimum coverage threshold (70%), subprocess tests included"
+run = '''
+set -euo pipefail
+dir=$(mktemp -d)
+trap 'rm -rf "$dir"' EXIT
+mkdir -p "$dir/unit" "$dir/subprocess" "$dir/merged"
+COVERDIR_SUBPROCESS="$dir/subprocess" go test -count=1 -cover -coverpkg=./... ./... -args -test.gocoverdir="$dir/unit"
+go tool covdata merge -i="$dir/unit,$dir/subprocess" -o="$dir/merged"
+go tool covdata textfmt -i="$dir/merged" -o=coverage.out
+# ^total: rather than total, which also matches every covered function whose
+# name contains it, handing awk two numbers and failing the gate with a syntax
+# error rather than a verdict.
+coverage=$(go tool cover -func=coverage.out | grep '^total:' | awk '{print $3}' | sed 's/%//')
+echo "Current coverage: ${coverage}%"
+if (( $(awk "BEGIN {print ($coverage < 70)}") )); then
+    echo "Coverage ${coverage}% is below 70% minimum threshold"
+    exit 1
+fi
+'''
+
+# `-update` rewrites goldens and never deletes one, so a golden whose test was renamed
+# or removed lingers. GOLDEN_TAGS=<tag> includes goldens behind a build tag.
+[tasks."test:golden-orphans"]
+description = "Fail on any .golden file that no test regenerates"
+shell = "bash -c"
+run = '''
+set -euo pipefail
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+mkdir "$work/tree"
+rsync -a --exclude=.git --exclude='*.golden' ./ "$work/tree/"
+find . -name '*.golden' -not -path './.git/*' | sort > "$work/have"
+if [ ! -s "$work/have" ]; then
+  echo "No .golden files to check"
+  exit 0
+fi
+pkgs=$(sed -E 's#/testdata/.*#/#' "$work/have" | sort -u)
+cd "$work/tree"
+# shellcheck disable=SC2086 # pkgs is a list of package directories
+go test -count=1 ${GOLDEN_TAGS:+-tags="$GOLDEN_TAGS"} $pkgs -update
+find . -name '*.golden' | sort > "$work/made"
+orphans=$(comm -23 "$work/have" "$work/made")
+if [ -n "$orphans" ]; then
+  echo "Orphan golden files (no test regenerated them):" >&2
+  echo "$orphans" >&2
+  exit 1
+fi
+echo "No orphan golden files"
+'''
+
+[tasks."test:view-coverage"]
+description = "View coverage report in browser"
+run = "go tool cover -html=coverage.out"
+
+# "latest" is deliberately absent: a formatter or linter that resolves differently on a
+# laptop than on a runner fails only in CI, which is the worst place to find out.
+[tools]
+actionlint = "1.7.12"
+go = "1.26.6"
+"go:github.com/golangci/golines" = "0.15.0"
+"golangci-lint" = "2.13.2"
+hk = "1.56.1"
+jq = "1.8.2"
+ls-lint = "2.3.1"
+"pipx:commitizen" = "4.18.0"
+"pipx:yamllint" = "1.38.0"
+pkl = "0.32.1"
+shellcheck = "0.11.0"
+tombi = "1.5.0"
+typos = "1.50.0"
