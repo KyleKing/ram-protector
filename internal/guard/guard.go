@@ -48,9 +48,12 @@ type Config struct {
 	TermAfter     time.Duration
 	KillAfter     time.Duration
 	MemFloorBytes uint64
-	PollHealthy   time.Duration
-	PollWarn      time.Duration
-	PollCritical  time.Duration
+	// SwapSpikeBytes treats swap growing this much between ticks as warn-level
+	// pressure; memorystatus_level lags fast leaks on macOS. Zero disables it.
+	SwapSpikeBytes uint64
+	PollHealthy    time.Duration
+	PollWarn       time.Duration
+	PollCritical   time.Duration
 }
 
 type held struct {
@@ -80,15 +83,16 @@ func WithNow(now func() time.Time) Option {
 
 // Guard runs the evaluate/act loop.
 type Guard struct {
-	sys     Sys
-	scorer  *score.Scorer
-	journal *journal.Writer
-	notify  func(title, body string)
-	held    map[int32]*held
-	blocked map[int32]bool
-	now     func() time.Time
-	cfg     Config
-	healthy int
+	sys      Sys
+	scorer   *score.Scorer
+	journal  *journal.Writer
+	notify   func(title, body string)
+	held     map[int32]*held
+	blocked  map[int32]bool
+	now      func() time.Time
+	cfg      Config
+	healthy  int
+	prevSwap uint64
 }
 
 // New builds a guard and, in protect mode, re-adopts processes a previous run
@@ -159,7 +163,14 @@ func (g *Guard) Tick() time.Duration {
 	now := g.now()
 	g.scorer.Observe(procs, now)
 	g.dropDead(procs)
-	g.journalSnapshot(st, procs, now)
+
+	var swapDelta uint64
+	if g.prevSwap > 0 && st.SwapUsed > g.prevSwap {
+		swapDelta = st.SwapUsed - g.prevSwap
+	}
+	g.prevSwap = st.SwapUsed
+	spiking := g.cfg.SwapSpikeBytes > 0 && swapDelta >= g.cfg.SwapSpikeBytes
+	g.journalSnapshot(st, procs, now, swapDelta)
 
 	if st.Level >= g.cfg.ResumeLevel {
 		g.healthy++
@@ -169,21 +180,21 @@ func (g *Guard) Tick() time.Duration {
 	if len(g.held) > 0 && g.healthy >= g.cfg.ResumeTicks {
 		g.resumeAll()
 	}
-	if st.Level >= g.cfg.WarnLevel {
+	if st.Level >= g.cfg.WarnLevel && !spiking {
 		return g.cfg.PollHealthy
 	}
 
 	g.escalate(now)
-	g.maybePause(st, procs, now)
+	g.maybePause(st, procs, now, spiking)
 
-	return g.intervalFor(st)
+	return g.intervalFor(st, spiking)
 }
 
-func (g *Guard) intervalFor(st mem.Status) time.Duration {
+func (g *Guard) intervalFor(st mem.Status, spiking bool) time.Duration {
 	switch {
 	case st.Level < g.cfg.CriticalLevel:
 		return g.cfg.PollCritical
-	case len(g.held) > 0:
+	case len(g.held) > 0 || spiking:
 		return g.cfg.PollWarn
 	default:
 		return g.cfg.PollHealthy
@@ -221,7 +232,7 @@ func (g *Guard) escalate(now time.Time) {
 }
 
 // maybePause picks the single worst offender and SIGSTOPs it with its tree.
-func (g *Guard) maybePause(st mem.Status, procs []proc.Proc, now time.Time) {
+func (g *Guard) maybePause(st mem.Status, procs []proc.Proc, now time.Time, spiking bool) {
 	victim, top := g.pickVictim(st, procs)
 	dry := g.cfg.Mode == config.ModeObserve
 
@@ -230,6 +241,9 @@ func (g *Guard) maybePause(st mem.Status, procs []proc.Proc, now time.Time) {
 		verb = "would_stop"
 	}
 	ev := journal.Event{Time: now, Kind: "decision", Level: st.Level, Dry: dry, Top: top}
+	if spiking && st.Level >= g.cfg.WarnLevel {
+		ev.Msg = "trigger=swap_spike"
+	}
 	if victim != nil {
 		ev.Action = verb
 		ev.PID = victim.p.PID
@@ -388,7 +402,7 @@ func (g *Guard) dropDead(procs []proc.Proc) {
 
 // journalSnapshot records pressure and the largest processes every tick, so
 // observe mode accumulates real data for tuning.
-func (g *Guard) journalSnapshot(st mem.Status, procs []proc.Proc, now time.Time) {
+func (g *Guard) journalSnapshot(st mem.Status, procs []proc.Proc, now time.Time, swapDelta uint64) {
 	sorted := slices.Clone(procs)
 	slices.SortFunc(sorted, func(a, b proc.Proc) int {
 		return cmpUint64(b.RSS, a.RSS)
@@ -402,7 +416,7 @@ func (g *Guard) journalSnapshot(st mem.Status, procs []proc.Proc, now time.Time)
 	}
 	g.journal.Log(journal.Event{
 		Time: now, Kind: "snapshot", Level: st.Level,
-		Top: top, Msg: "swap=" + gib(st.SwapUsed),
+		Top: top, SwapDelta: swapDelta, Msg: "swap=" + gib(st.SwapUsed),
 	})
 }
 

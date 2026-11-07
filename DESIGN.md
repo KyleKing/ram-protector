@@ -40,6 +40,10 @@
   deepest-first.
 - **Adaptive polling.** ~30s when healthy, ~5s under warn, ~1s under critical —
   near-zero cost idle, seconds of reaction time at the cliff.
+- **Two pressure signals.** `kern.memorystatus_level` lags fast leaks because
+  macOS absorbs them by swapping first (observed: +6 GB swap in 90s while level
+  stayed ≥34). Swap growth between ticks past `swap_spike_mb` therefore counts
+  as warn-level pressure; `swap_delta` is journaled per snapshot for tuning.
 - **Observe is the default mode.** The same code path logs every decision it
   *would* take; no signal is ever sent. Data collected there tunes the tiers
   and thresholds before `protect` is enabled.

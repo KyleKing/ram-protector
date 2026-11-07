@@ -165,13 +165,12 @@ func doUninstall() error {
 	return nil
 }
 
-func memFloorBytes(cfg config.Config) uint64 {
-	floor := cfg.MemFloorMB
-	if floor < 0 {
-		floor = 0
+func mbBytes(n int) uint64 {
+	if n < 0 {
+		n = 0
 	}
 
-	return uint64(floor) << mbShift
+	return uint64(n) << mbShift
 }
 
 func wrapRun(err error) error {
@@ -184,18 +183,19 @@ func wrapRun(err error) error {
 
 func guardConfig(cfg config.Config) guard.Config {
 	return guard.Config{
-		Mode:          cfg.Mode,
-		WarnLevel:     cfg.WarnLevel,
-		CriticalLevel: cfg.CriticalLevel,
-		ResumeLevel:   cfg.ResumeLevel,
-		ResumeTicks:   cfg.ResumeTicks,
-		TermAfter:     cfg.TermAfter.Duration,
-		KillAfter:     cfg.KillAfter.Duration,
-		MemFloorBytes: memFloorBytes(cfg),
-		PollHealthy:   cfg.PollHealthy.Duration,
-		PollWarn:      cfg.PollWarn.Duration,
-		PollCritical:  cfg.PollCritical.Duration,
-		PausedFile:    filepath.Join(cfg.LogDir, "paused.json"),
+		Mode:           cfg.Mode,
+		WarnLevel:      cfg.WarnLevel,
+		CriticalLevel:  cfg.CriticalLevel,
+		ResumeLevel:    cfg.ResumeLevel,
+		ResumeTicks:    cfg.ResumeTicks,
+		TermAfter:      cfg.TermAfter.Duration,
+		KillAfter:      cfg.KillAfter.Duration,
+		MemFloorBytes:  mbBytes(cfg.MemFloorMB),
+		SwapSpikeBytes: mbBytes(cfg.SwapSpikeMB),
+		PollHealthy:    cfg.PollHealthy.Duration,
+		PollWarn:       cfg.PollWarn.Duration,
+		PollCritical:   cfg.PollCritical.Duration,
+		PausedFile:     filepath.Join(cfg.LogDir, "paused.json"),
 	}
 }
 
@@ -235,7 +235,7 @@ func printCheck(cfg config.Config) error {
 	rows := make([]ranked, 0, showTop)
 	for _, p := range procs {
 		s, reasons := sc.Score(p, now)
-		if s <= 0 || p.RSS < memFloorBytes(cfg) {
+		if s <= 0 || p.RSS < mbBytes(cfg.MemFloorMB) {
 			continue
 		}
 		rows = append(rows, ranked{p: p, s: s, r: reasons})
@@ -298,7 +298,12 @@ func formatEvent(e journal.Event) string {
 	case "resume":
 		return fmt.Sprintf("%s %-8s %s%s", ts, e.Kind, e.Msg, dry)
 	default:
-		return fmt.Sprintf("%s %-8s lvl=%d%% %s%s", ts, e.Kind, e.Level, e.Msg, dry)
+		dswap := ""
+		if e.SwapDelta > 0 {
+			dswap = fmt.Sprintf(" dswap=+%.1fGB", float64(e.SwapDelta)/bytesPerGiB)
+		}
+
+		return fmt.Sprintf("%s %-8s lvl=%d%% %s%s%s", ts, e.Kind, e.Level, e.Msg, dswap, dry)
 	}
 }
 

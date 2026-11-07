@@ -60,6 +60,7 @@ mode = "protect"
 # term_after = "45s"     # paused this long under pressure → SIGTERM
 # kill_after = "10s"     # SIGTERM → SIGKILL grace
 # mem_floor_mb = 512     # ignore smaller processes
+# swap_spike_mb = 1024   # swap growing this fast counts as warn-level pressure
 # extra_disposable = ["my-tool"]
 # extra_never = ["do-not-touch"]   # extra_* lists override built-ins by tier
 ```

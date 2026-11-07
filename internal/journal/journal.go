@@ -32,9 +32,11 @@ type Event struct {
 	Top    []Candidate `json:"top,omitempty"`
 	Level  int         `json:"level,omitempty"`
 	RSS    uint64      `json:"rss,omitempty"`
-	Score  float64     `json:"score,omitempty"`
-	PID    int32       `json:"pid,omitempty"`
-	Dry    bool        `json:"dry,omitempty"`
+	// SwapDelta is bytes of swap growth since the previous snapshot.
+	SwapDelta uint64  `json:"swap_delta,omitempty"`
+	Score     float64 `json:"score,omitempty"`
+	PID       int32   `json:"pid,omitempty"`
+	Dry       bool    `json:"dry,omitempty"`
 }
 
 const (

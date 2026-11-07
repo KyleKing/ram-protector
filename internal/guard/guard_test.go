@@ -24,13 +24,16 @@ type call struct {
 }
 
 type fakeSys struct {
-	deny  map[int32]bool
-	procs []proc.Proc
-	calls []call
-	level int
+	deny     map[int32]bool
+	procs    []proc.Proc
+	calls    []call
+	level    int
+	swapUsed uint64
 }
 
-func (f *fakeSys) Memory() (mem.Status, error)     { return mem.Status{Level: f.level}, nil }
+func (f *fakeSys) Memory() (mem.Status, error) {
+	return mem.Status{Level: f.level, SwapUsed: f.swapUsed}, nil
+}
 func (f *fakeSys) Processes() ([]proc.Proc, error) { return f.procs, nil }
 func (f *fakeSys) Signal(pid int32, sig syscall.Signal) error {
 	f.calls = append(f.calls, call{pid: pid, sig: sig})
@@ -78,18 +81,19 @@ func newHarness(t *testing.T, procs []proc.Proc, level int) *harness {
 	fs := &fakeSys{level: level, procs: procs, deny: map[int32]bool{}}
 	now := time.Now()
 	g := guard.New(guard.Config{
-		Mode:          config.ModeProtect,
-		WarnLevel:     20,
-		CriticalLevel: 8,
-		ResumeLevel:   30,
-		ResumeTicks:   2,
-		TermAfter:     time.Minute,
-		KillAfter:     10 * time.Second,
-		MemFloorBytes: 1 << 20,
-		PollHealthy:   time.Minute,
-		PollWarn:      time.Second,
-		PollCritical:  time.Millisecond,
-		PausedFile:    filepath.Join(dir, "paused.json"),
+		Mode:           config.ModeProtect,
+		WarnLevel:      20,
+		CriticalLevel:  8,
+		ResumeLevel:    30,
+		ResumeTicks:    2,
+		TermAfter:      time.Minute,
+		KillAfter:      10 * time.Second,
+		MemFloorBytes:  1 << 20,
+		SwapSpikeBytes: gib,
+		PollHealthy:    time.Minute,
+		PollWarn:       time.Second,
+		PollCritical:   time.Millisecond,
+		PausedFile:     filepath.Join(dir, "paused.json"),
 	}, fs, score.New(nil, nil, nil), jw, nil, guard.WithNow(func() time.Time { return now }))
 
 	return &harness{sys: fs, guard: g, now: &now}
@@ -113,6 +117,20 @@ func TestHealthy_NoAction(t *testing.T) {
 	}
 	if len(h.sys.calls) != 0 {
 		t.Errorf("signaled %d times at healthy level", len(h.sys.calls))
+	}
+}
+
+func TestSwapSpike_PausesDespiteHealthyLevel(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, tscTree(), 70)
+	h.sys.swapUsed = 5 * gib
+	if got := h.guard.Tick(); got != time.Minute {
+		t.Fatalf("first sample must not read as a spike: interval = %v", got)
+	}
+	h.sys.swapUsed += 2 * gib
+	h.guard.Tick()
+	if !hasCall(h.sys.calls, syscall.SIGSTOP, 100) {
+		t.Errorf("swap spike at healthy level paused no victim: %+v", h.sys.calls)
 	}
 }
 
