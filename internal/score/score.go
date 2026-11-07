@@ -72,6 +72,7 @@ var (
 		" helper", "--type=renderer", "--type=gpu",
 	}
 	builtinLastResort = []string{
+		"claude", "codex", "devin", "aider", "gemini",
 		"wezterm", "iterm", "terminal", "ghostty", "kitty", "alacritty",
 		"tmux", "screen", "code", "cursor", "zed", "sublime", "emacs",
 		"nvim", "vim", "google chrome", "safari", "firefox", "arc",
