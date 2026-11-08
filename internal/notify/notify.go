@@ -24,3 +24,17 @@ func Send(ctx context.Context, title, body string) error {
 
 	return nil
 }
+
+// Alert shows a dialog that stays on screen until dismissed; it blocks until
+// the user clicks OK, so callers run it in a goroutine. Unlike a notification
+// banner there is no timeout: the process lives as long as the dialog does.
+func Alert(title, body string) error {
+	script := `display alert "` + escaper.Replace(body) +
+		`" with title "` + escaper.Replace(title) + `"`
+	//nolint:gosec,noctx // fixed binary; dialog intentionally outlives caller context
+	if err := exec.Command(osascript, "-e", script).Run(); err != nil {
+		return fmt.Errorf("osascript alert: %w", err)
+	}
+
+	return nil
+}

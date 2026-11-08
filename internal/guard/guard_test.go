@@ -95,7 +95,7 @@ func newHarness(t *testing.T, procs []proc.Proc, level int) *harness {
 		PollWarn:       time.Second,
 		PollCritical:   time.Millisecond,
 		PausedFile:     filepath.Join(dir, "paused.json"),
-	}, fs, score.New(nil, nil, nil), jw, nil, guard.WithNow(func() time.Time { return now }))
+	}, fs, score.New(nil, nil, nil), jw, nil, nil, guard.WithNow(func() time.Time { return now }))
 
 	return &harness{sys: fs, guard: g, now: &now}
 }
@@ -169,6 +169,20 @@ func TestHog_EscalatesWhileOverCap(t *testing.T) {
 	h.guard.Tick()
 	if !hasCall(h.sys.calls, syscall.SIGKILL, 200) {
 		t.Fatalf("over-cap hog never killed: %+v", h.sys.calls)
+	}
+}
+
+func TestKilled_NotRepickedImmediately(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, hogProcs(), 70)
+	h.guard.Tick()
+	*h.now = h.now.Add(2 * time.Minute)
+	h.guard.Tick()
+	*h.now = h.now.Add(20 * time.Second)
+	h.guard.Tick()
+	h.guard.Tick() // the corpse still lists in procs; it must not be re-stopped
+	if got := countSig(h.sys.calls, syscall.SIGSTOP); got != 1 {
+		t.Errorf("SIGSTOP sent %d times, killed pid was re-picked: %+v", got, h.sys.calls)
 	}
 }
 
@@ -247,7 +261,7 @@ func TestObserve_SignalsNothing(t *testing.T) {
 	g := guard.New(guard.Config{
 		Mode: config.ModeObserve, WarnLevel: 20, CriticalLevel: 8, ResumeLevel: 30,
 		ResumeTicks: 2, MemFloorBytes: 1 << 20, PollHealthy: time.Minute,
-	}, fs, score.New(nil, nil, nil), jw, nil)
+	}, fs, score.New(nil, nil, nil), jw, nil, nil)
 	g.Tick()
 	if len(fs.calls) != 0 {
 		t.Errorf("observe mode signaled %d times", len(fs.calls))
@@ -327,7 +341,7 @@ func TestAdopt_RestoresPausedState(t *testing.T) {
 	g := guard.New(guard.Config{
 		Mode: config.ModeProtect, WarnLevel: 20, CriticalLevel: 8, ResumeLevel: 30,
 		ResumeTicks: 2, MemFloorBytes: 1 << 20, PollHealthy: time.Minute, PausedFile: pausedFile,
-	}, fs, score.New(nil, nil, nil), jw, nil)
+	}, fs, score.New(nil, nil, nil), jw, nil, nil)
 	if g.Held()[100] != "node" {
 		t.Errorf("paused victim not adopted: %v", g.Held())
 	}

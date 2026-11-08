@@ -23,11 +23,12 @@ import (
 )
 
 const (
-	topN       = 5
-	kindAction = "action"
-	dirPerm    = 0o750
-	filePerm   = 0o600
-	gibShift   = 30
+	topN           = 5
+	kindAction     = "action"
+	dirPerm        = 0o750
+	filePerm       = 0o600
+	gibShift       = 30
+	killedCooldown = 2 * time.Minute
 )
 
 // Sys is the boundary the guard acts through; tests substitute a fake.
@@ -93,8 +94,10 @@ type Guard struct {
 	scorer   *score.Scorer
 	journal  *journal.Writer
 	notify   func(title, body string)
+	alert    func(title, body string)
 	held     map[int32]*held
 	blocked  map[int32]bool
+	killed   map[int32]time.Time
 	now      func() time.Time
 	cfg      Config
 	healthy  int
@@ -103,11 +106,14 @@ type Guard struct {
 
 // New builds a guard and, in protect mode, re-adopts processes a previous run
 // paused but never resumed.
-func New(cfg Config, sys Sys, sc *score.Scorer, jw *journal.Writer, notify func(title, body string),
+func New(cfg Config, sys Sys, sc *score.Scorer, jw *journal.Writer, notify, alert func(title, body string),
 	opts ...Option,
 ) *Guard {
 	if notify == nil {
 		notify = func(string, string) {}
+	}
+	if alert == nil {
+		alert = notify
 	}
 	g := &Guard{
 		cfg:     cfg,
@@ -115,8 +121,10 @@ func New(cfg Config, sys Sys, sc *score.Scorer, jw *journal.Writer, notify func(
 		scorer:  sc,
 		journal: jw,
 		notify:  notify,
+		alert:   alert,
 		held:    map[int32]*held{},
 		blocked: map[int32]bool{},
+		killed:  map[int32]time.Time{},
 		now:     time.Now,
 	}
 	for _, opt := range opts {
@@ -167,6 +175,11 @@ func (g *Guard) Tick() time.Duration {
 		return g.cfg.PollWarn
 	}
 	now := g.now()
+	for pid, t := range g.killed {
+		if now.Sub(t) >= killedCooldown {
+			delete(g.killed, pid)
+		}
+	}
 	g.scorer.Observe(procs, now)
 	g.dropDead(procs)
 
@@ -233,6 +246,7 @@ func (g *Guard) escalate(now time.Time, procs []proc.Proc, pressured bool) {
 				Time: now, Kind: kindAction, Action: "term",
 				PID: pid, Name: h.name, RSS: h.rss, Msg: reason,
 			})
+			g.alert("ram-protector", fmt.Sprintf("terminating %s (%s) — %s", h.name, gib(h.rss), reason))
 
 			continue
 		}
@@ -242,7 +256,10 @@ func (g *Guard) escalate(now time.Time, procs []proc.Proc, pressured bool) {
 				Time: now, Kind: kindAction, Action: "kill",
 				PID: pid, Name: h.name, RSS: h.rss, Msg: reason,
 			})
-			g.notify("ram-protector", fmt.Sprintf("killed %s (%s) — %s", h.name, gib(h.rss), reason))
+			g.alert("ram-protector", fmt.Sprintf("killed %s (%s) — %s", h.name, gib(h.rss), reason))
+			for _, tpid := range h.tree {
+				g.killed[tpid] = now
+			}
 			delete(g.held, pid)
 		}
 	}
@@ -379,7 +396,8 @@ func (g *Guard) pickVictim(st mem.Status, procs []proc.Proc) (*scored, []journal
 	cands := make([]scored, 0, len(procs))
 	now := g.now()
 	for _, p := range procs {
-		if heldSet[p.PID] || g.blocked[p.PID] || p.RSS < g.cfg.MemFloorBytes {
+		if heldSet[p.PID] || g.blocked[p.PID] || !g.killed[p.PID].IsZero() ||
+			p.RSS < g.cfg.MemFloorBytes {
 			continue
 		}
 		s, reasons := g.scorer.Score(p, now)
@@ -407,7 +425,8 @@ func (g *Guard) pickHog(procs []proc.Proc, now time.Time) (*scored, []journal.Ca
 	heldSet := g.heldPIDs()
 	cands := make([]scored, 0, len(procs))
 	for _, p := range procs {
-		if heldSet[p.PID] || g.blocked[p.PID] || p.RSS < g.cfg.HogBytes {
+		if heldSet[p.PID] || g.blocked[p.PID] || !g.killed[p.PID].IsZero() ||
+			p.RSS < g.cfg.HogBytes {
 			continue
 		}
 		if g.scorer.TierOf(p) != score.TierDisposable {

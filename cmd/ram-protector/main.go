@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -138,7 +139,8 @@ func runDaemon(cfg config.Config, eventsPath string) error {
 	}()
 
 	g := guard.New(guardConfig(cfg), sys{},
-		score.New(cfg.Disposable, cfg.LastResort, cfg.Never), jw, notifier(cfg))
+		score.New(cfg.Disposable, cfg.LastResort, cfg.Never), jw,
+		notifier(cfg), alerter(cfg))
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	slog.Info("ram-protector starting", "mode", string(cfg.Mode), "log", eventsPath)
@@ -210,6 +212,28 @@ func notifier(cfg config.Config) func(title, body string) {
 			defer cancel()
 			if err := notify.Send(ctx, title, body); err != nil {
 				slog.Warn("notification failed", "err", err)
+			}
+		}()
+	}
+}
+
+// alertOpen keeps sticky alerts to one dialog at a time so a kill storm
+// cannot pile up windows; skipped alerts are still journaled.
+var alertOpen atomic.Bool
+
+func alerter(cfg config.Config) func(title, body string) {
+	return func(title, body string) {
+		if !cfg.Notify || cfg.Mode == config.ModeObserve {
+			return
+		}
+		if !alertOpen.CompareAndSwap(false, true) {
+			slog.Info("alert dialog already open, skipped", "title", title)
+			return
+		}
+		go func() {
+			defer alertOpen.Store(false)
+			if err := notify.Alert(title, body); err != nil {
+				slog.Warn("alert failed", "err", err)
 			}
 		}()
 	}
