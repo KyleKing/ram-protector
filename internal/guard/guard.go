@@ -433,9 +433,9 @@ func (g *Guard) pickHog(procs []proc.Proc, now time.Time) (*scored, []journal.Ca
 
 // signal sends sig, or only records it in observe mode. EPERM marks the PID
 // unkillable for the rest of the run.
-func (g *Guard) signal(pid int32, sig syscall.Signal, act string) {
+func (g *Guard) signal(pid int32, sig syscall.Signal, act, name string) {
 	if g.cfg.Mode == config.ModeObserve {
-		g.journal.Log(journal.Event{Time: g.now(), Kind: kindAction, Action: act, PID: pid, Dry: true})
+		g.journal.Log(journal.Event{Time: g.now(), Kind: kindAction, Action: act, PID: pid, Name: name, Dry: true})
 
 		return
 	}
@@ -444,12 +444,15 @@ func (g *Guard) signal(pid int32, sig syscall.Signal, act string) {
 			g.blocked[pid] = true
 		}
 		if !errors.Is(err, syscall.ESRCH) {
-			g.journal.Log(journal.Event{Time: g.now(), Kind: kindAction, Action: act, PID: pid, Msg: err.Error()})
+			g.journal.Log(journal.Event{
+				Time: g.now(), Kind: kindAction, Action: act,
+				PID: pid, Name: name, Msg: err.Error(),
+			})
 		}
 
 		return
 	}
-	g.journal.Log(journal.Event{Time: g.now(), Kind: kindAction, Action: act, PID: pid})
+	g.journal.Log(journal.Event{Time: g.now(), Kind: kindAction, Action: act, PID: pid, Name: name})
 }
 
 // signalTree stops parent-first so it cannot fork during the walk, but terms
@@ -461,7 +464,7 @@ func (g *Guard) signalTree(h *held, sig syscall.Signal, act string) {
 		slices.Reverse(order)
 	}
 	for _, pid := range order {
-		g.signal(pid, sig, act)
+		g.signal(pid, sig, act, h.name)
 	}
 }
 
@@ -477,7 +480,7 @@ func (g *Guard) resumeAll(keep map[int32]bool) {
 			continue
 		}
 		for _, tpid := range h.tree {
-			g.signal(tpid, syscall.SIGCONT, "cont")
+			g.signal(tpid, syscall.SIGCONT, "cont", h.name)
 		}
 		names = append(names, fmt.Sprintf("%s(%d)", h.name, pid))
 		delete(g.held, pid)
