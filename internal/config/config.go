@@ -52,6 +52,7 @@ type Config struct {
 	TermAfter     Duration `toml:"term_after"`
 	KillAfter     Duration `toml:"kill_after"`
 	MemFloorMB    int      `toml:"mem_floor_mb"`
+	HogMB         int      `toml:"hog_mb"`
 	CriticalLevel int      `toml:"critical_level"`
 	WarnLevel     int      `toml:"warn_level"`
 	SwapSpikeMB   int      `toml:"swap_spike_mb"`
@@ -71,6 +72,7 @@ const (
 	defaultResumeTicks   = 2
 	defaultMemFloorMB    = 512
 	defaultSwapSpikeMB   = 1024
+	defaultHogMB         = 6144
 )
 
 // Default returns the zero-config configuration: observe mode, journal and
@@ -90,6 +92,7 @@ func Default() Config {
 		TermAfter:     Duration{45 * time.Second},
 		KillAfter:     Duration{10 * time.Second},
 		MemFloorMB:    defaultMemFloorMB,
+		HogMB:         defaultHogMB,
 		SwapSpikeMB:   defaultSwapSpikeMB,
 	}
 }

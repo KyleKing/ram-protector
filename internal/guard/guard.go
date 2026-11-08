@@ -51,9 +51,13 @@ type Config struct {
 	// SwapSpikeBytes treats swap growing this much between ticks as warn-level
 	// pressure; memorystatus_level lags fast leaks on macOS. Zero disables it.
 	SwapSpikeBytes uint64
-	PollHealthy    time.Duration
-	PollWarn       time.Duration
-	PollCritical   time.Duration
+	// HogBytes pauses a disposable process over this RSS even when the system
+	// is healthy; a slow leak otherwise never trips the pressure triggers.
+	// Zero disables it.
+	HogBytes     uint64
+	PollHealthy  time.Duration
+	PollWarn     time.Duration
+	PollCritical time.Duration
 }
 
 type held struct {
@@ -63,6 +67,7 @@ type held struct {
 	name      string
 	tree      []int32
 	rss       uint64
+	hog       bool
 }
 
 type pausedRecord struct {
@@ -71,6 +76,7 @@ type pausedRecord struct {
 	Name      string    `json:"name"`
 	RSS       uint64    `json:"rss"`
 	PID       int32     `json:"pid"`
+	Hog       bool      `json:"hog,omitempty"`
 }
 
 // Option customizes a Guard; tests use these to inject a clock.
@@ -125,7 +131,7 @@ func New(cfg Config, sys Sys, sc *score.Scorer, jw *journal.Writer, notify func(
 // On exit it resumes everything it paused: a frozen process outliving the
 // daemon is a worse outcome than the leak it was stopped for.
 func (g *Guard) Run(ctx context.Context) error {
-	defer g.resumeAll()
+	defer g.resumeAll(nil)
 
 	interval := g.cfg.PollHealthy
 	for {
@@ -178,14 +184,16 @@ func (g *Guard) Tick() time.Duration {
 		g.healthy = 0
 	}
 	if len(g.held) > 0 && g.healthy >= g.cfg.ResumeTicks {
-		g.resumeAll()
-	}
-	if st.Level >= g.cfg.WarnLevel && !spiking {
-		return g.cfg.PollHealthy
+		g.resumeAll(g.stillOverCap(procs))
 	}
 
-	g.escalate(now)
-	g.maybePause(st, procs, now, spiking)
+	pressured := st.Level < g.cfg.WarnLevel || spiking
+	g.escalate(now, procs, pressured)
+	if pressured {
+		g.maybePause(st, procs, now, spiking)
+	} else {
+		g.maybePauseHog(st, procs, now)
+	}
 
 	return g.intervalFor(st, spiking)
 }
@@ -202,18 +210,28 @@ func (g *Guard) intervalFor(st mem.Status, spiking bool) time.Duration {
 }
 
 // escalate advances held victims along pause -> TERM -> KILL while pressure
-// stays below warn. Between warn and resume they stay paused, untouched.
-func (g *Guard) escalate(now time.Time) {
+// stays below warn. Between warn and resume they stay paused, untouched —
+// except hogs, which advance while they remain over the ceiling: a paused
+// process frees almost nothing, so holding it forever protects nothing.
+func (g *Guard) escalate(now time.Time, procs []proc.Proc, pressured bool) {
+	overCap := g.stillOverCap(procs)
 	for pid, h := range g.held {
+		if !pressured && !overCap[pid] {
+			continue
+		}
 		if now.Sub(h.stoppedAt) < g.cfg.TermAfter {
 			continue
+		}
+		reason := "pressure stayed below warn"
+		if !pressured {
+			reason = "stayed over the process ceiling"
 		}
 		if h.termAt.IsZero() {
 			h.termAt = now
 			g.signalTree(h, syscall.SIGTERM, "term")
 			g.journal.Log(journal.Event{
 				Time: now, Kind: kindAction, Action: "term",
-				PID: pid, Name: h.name, RSS: h.rss, Msg: "pressure stayed below warn",
+				PID: pid, Name: h.name, RSS: h.rss, Msg: reason,
 			})
 
 			continue
@@ -222,13 +240,33 @@ func (g *Guard) escalate(now time.Time) {
 			g.signalTree(h, syscall.SIGKILL, "kill")
 			g.journal.Log(journal.Event{
 				Time: now, Kind: kindAction, Action: "kill",
-				PID: pid, Name: h.name, RSS: h.rss,
+				PID: pid, Name: h.name, RSS: h.rss, Msg: reason,
 			})
-			g.notify("ram-protector", fmt.Sprintf("killed %s (%s) — memory stayed critical", h.name, gib(h.rss)))
+			g.notify("ram-protector", fmt.Sprintf("killed %s (%s) — %s", h.name, gib(h.rss), reason))
 			delete(g.held, pid)
 		}
 	}
 	g.savePaused()
+}
+
+// stillOverCap returns held hogs whose RSS still exceeds the ceiling; they
+// stay paused through recovery and keep escalating.
+func (g *Guard) stillOverCap(procs []proc.Proc) map[int32]bool {
+	if len(g.held) == 0 || g.cfg.HogBytes == 0 {
+		return nil
+	}
+	rss := make(map[int32]uint64, len(procs))
+	for _, p := range procs {
+		rss[p.PID] = p.RSS
+	}
+	keep := map[int32]bool{}
+	for pid, h := range g.held {
+		if h.hog && rss[pid] >= g.cfg.HogBytes {
+			keep[pid] = true
+		}
+	}
+
+	return keep
 }
 
 // maybePause picks the single worst offender and SIGSTOPs it with its tree.
@@ -255,9 +293,42 @@ func (g *Guard) maybePause(st mem.Status, procs []proc.Proc, now time.Time, spik
 	if victim == nil {
 		return
 	}
+	msg := fmt.Sprintf("paused %s (%s), %d%% memory free. Will resume when clear.",
+		victim.p.Name, gib(victim.p.RSS), st.Level)
+	g.pauseTree(victim, procs, now, false, msg)
+}
+
+// maybePauseHog freezes a disposable process over the RSS ceiling while the
+// system is otherwise healthy.
+func (g *Guard) maybePauseHog(st mem.Status, procs []proc.Proc, now time.Time) {
+	if g.cfg.HogBytes == 0 {
+		return
+	}
+	victim, top := g.pickHog(procs, now)
+	if victim == nil {
+		return
+	}
+	dry := g.cfg.Mode == config.ModeObserve
+	verb := "stop"
+	if dry {
+		verb = "would_stop"
+	}
+	g.journal.Log(journal.Event{
+		Time: now, Kind: "decision", Level: st.Level, Dry: dry, Top: top,
+		Action: verb, PID: victim.p.PID, Name: victim.p.Name, RSS: victim.p.RSS,
+		Msg: "trigger=hog_ceiling",
+	})
+	msg := fmt.Sprintf("paused %s (%s) — over the process ceiling.",
+		victim.p.Name, gib(victim.p.RSS))
+	g.pauseTree(victim, procs, now, true, msg)
+}
+
+// pauseTree holds the victim, SIGSTOPs its tree, notifies, and persists.
+// A victim whose stop failed is dropped rather than tracked as held.
+func (g *Guard) pauseTree(victim *scored, procs []proc.Proc, now time.Time, hog bool, msg string) {
 	h := &held{
 		name: victim.p.Name, rss: victim.p.RSS, created: victim.p.Created,
-		stoppedAt: now, tree: treeOf(victim.p.PID, procs),
+		stoppedAt: now, tree: treeOf(victim.p.PID, procs), hog: hog,
 	}
 	g.held[victim.p.PID] = h
 	g.signalTree(h, syscall.SIGSTOP, "stop")
@@ -265,7 +336,6 @@ func (g *Guard) maybePause(st mem.Status, procs []proc.Proc, now time.Time, spik
 		delete(g.held, victim.p.PID)
 		return
 	}
-	msg := fmt.Sprintf("paused %s (%s), %d%% memory free. Will resume when clear.", h.name, gib(h.rss), st.Level)
 	g.notify("ram-protector", msg)
 	g.savePaused()
 }
@@ -276,9 +346,7 @@ type scored struct {
 	score   float64
 }
 
-// pickVictim scores eligible processes and returns the best plus the top-N
-// leaderboard for the journal.
-func (g *Guard) pickVictim(st mem.Status, procs []proc.Proc) (*scored, []journal.Candidate) {
+func (g *Guard) heldPIDs() map[int32]bool {
 	heldSet := map[int32]bool{}
 	for _, h := range g.held {
 		for _, pid := range h.tree {
@@ -286,6 +354,28 @@ func (g *Guard) pickVictim(st mem.Status, procs []proc.Proc) (*scored, []journal
 		}
 	}
 
+	return heldSet
+}
+
+func topCandidates(cands []scored) []journal.Candidate {
+	top := make([]journal.Candidate, 0, topN)
+	for i, c := range cands {
+		if i >= topN {
+			break
+		}
+		top = append(top, journal.Candidate{
+			PID: c.p.PID, Name: c.p.Name,
+			RSS: c.p.RSS, Score: c.score, Reason: strings.Join(c.reasons, " "),
+		})
+	}
+
+	return top
+}
+
+// pickVictim scores eligible processes and returns the best plus the top-N
+// leaderboard for the journal.
+func (g *Guard) pickVictim(st mem.Status, procs []proc.Proc) (*scored, []journal.Candidate) {
+	heldSet := g.heldPIDs()
 	cands := make([]scored, 0, len(procs))
 	now := g.now()
 	for _, p := range procs {
@@ -303,16 +393,37 @@ func (g *Guard) pickVictim(st mem.Status, procs []proc.Proc) (*scored, []journal
 		return cmpFloat(b.score, a.score)
 	})
 
-	top := make([]journal.Candidate, 0, topN)
-	for i, c := range cands {
-		if i >= topN {
-			break
-		}
-		top = append(top, journal.Candidate{
-			PID: c.p.PID, Name: c.p.Name,
-			RSS: c.p.RSS, Score: c.score, Reason: strings.Join(c.reasons, " "),
-		})
+	top := topCandidates(cands)
+	if len(cands) == 0 {
+		return nil, top
 	}
+
+	return &cands[0], top
+}
+
+// pickHog scores disposable processes over the RSS ceiling; only they are
+// eligible while the system is healthy.
+func (g *Guard) pickHog(procs []proc.Proc, now time.Time) (*scored, []journal.Candidate) {
+	heldSet := g.heldPIDs()
+	cands := make([]scored, 0, len(procs))
+	for _, p := range procs {
+		if heldSet[p.PID] || g.blocked[p.PID] || p.RSS < g.cfg.HogBytes {
+			continue
+		}
+		if g.scorer.TierOf(p) != score.TierDisposable {
+			continue
+		}
+		s, reasons := g.scorer.Score(p, now)
+		if s < 0 {
+			continue
+		}
+		cands = append(cands, scored{p: p, score: s, reasons: reasons})
+	}
+	slices.SortFunc(cands, func(a, b scored) int {
+		return cmpFloat(b.score, a.score)
+	})
+
+	top := topCandidates(cands)
 	if len(cands) == 0 {
 		return nil, top
 	}
@@ -354,18 +465,25 @@ func (g *Guard) signalTree(h *held, sig syscall.Signal, act string) {
 	}
 }
 
-// resumeAll SIGCONTs every held tree and clears state.
-func (g *Guard) resumeAll() {
+// resumeAll SIGCONTs every held tree except those in keep and clears their
+// state. Run passes nil: nothing stays frozen when the daemon exits.
+func (g *Guard) resumeAll(keep map[int32]bool) {
 	if len(g.held) == 0 {
 		return
 	}
 	names := make([]string, 0, len(g.held))
 	for pid, h := range g.held {
+		if keep[pid] {
+			continue
+		}
 		for _, tpid := range h.tree {
 			g.signal(tpid, syscall.SIGCONT, "cont")
 		}
 		names = append(names, fmt.Sprintf("%s(%d)", h.name, pid))
 		delete(g.held, pid)
+	}
+	if len(names) == 0 {
+		return
 	}
 	g.healthy = 0
 	g.journal.Log(journal.Event{Time: g.now(), Kind: "resume", Msg: strings.Join(names, ", ")})
@@ -429,7 +547,7 @@ func (g *Guard) savePaused() {
 	for pid, h := range g.held {
 		recs = append(recs, pausedRecord{
 			PID: pid, Name: h.name, RSS: h.rss,
-			Created: h.created, StoppedAt: h.stoppedAt,
+			Created: h.created, StoppedAt: h.stoppedAt, Hog: h.hog,
 		})
 	}
 	raw, err := json.Marshal(recs)
@@ -475,7 +593,7 @@ func (g *Guard) adopt() {
 		}
 		g.held[r.PID] = &held{
 			name: r.Name, rss: r.RSS, created: r.Created,
-			stoppedAt: r.StoppedAt, tree: treeOf(r.PID, procs),
+			stoppedAt: r.StoppedAt, tree: treeOf(r.PID, procs), hog: r.Hog,
 		}
 	}
 }

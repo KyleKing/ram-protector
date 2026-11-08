@@ -44,6 +44,10 @@
   macOS absorbs them by swapping first (observed: +6 GB swap in 90s while level
   stayed ≥34). Swap growth between ticks past `swap_spike_mb` therefore counts
   as warn-level pressure; `swap_delta` is journaled per snapshot for tuning.
+- **Hog ceiling for slow leaks.** A leak creeping a few MB per minute trips
+  neither signal, so a disposable process over `hog_mb` is stopped even when
+  the system is healthy. Because a paused process frees almost nothing, hogs
+  keep escalating while over the cap instead of holding RAM frozen forever.
 - **Observe is the default mode.** The same code path logs every decision it
   *would* take; no signal is ever sent. Data collected there tunes the tiers
   and thresholds before `protect` is enabled.

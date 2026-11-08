@@ -191,6 +191,7 @@ func guardConfig(cfg config.Config) guard.Config {
 		TermAfter:      cfg.TermAfter.Duration,
 		KillAfter:      cfg.KillAfter.Duration,
 		MemFloorBytes:  mbBytes(cfg.MemFloorMB),
+		HogBytes:       mbBytes(cfg.HogMB),
 		SwapSpikeBytes: mbBytes(cfg.SwapSpikeMB),
 		PollHealthy:    cfg.PollHealthy.Duration,
 		PollWarn:       cfg.PollWarn.Duration,

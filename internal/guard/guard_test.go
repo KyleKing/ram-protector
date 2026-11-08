@@ -89,6 +89,7 @@ func newHarness(t *testing.T, procs []proc.Proc, level int) *harness {
 		TermAfter:      time.Minute,
 		KillAfter:      10 * time.Second,
 		MemFloorBytes:  1 << 20,
+		HogBytes:       6 * gib,
 		SwapSpikeBytes: gib,
 		PollHealthy:    time.Minute,
 		PollWarn:       time.Second,
@@ -131,6 +132,54 @@ func TestSwapSpike_PausesDespiteHealthyLevel(t *testing.T) {
 	h.guard.Tick()
 	if !hasCall(h.sys.calls, syscall.SIGSTOP, 100) {
 		t.Errorf("swap spike at healthy level paused no victim: %+v", h.sys.calls)
+	}
+}
+
+func hogProcs() []proc.Proc {
+	now := time.Now()
+
+	return []proc.Proc{
+		{PID: 200, PPID: 1, Name: "node", Cmdline: "node tsc --watch", RSS: 7 * gib, Created: now},
+		{PID: 300, PPID: 1, Name: "app", Cmdline: "app", RSS: 8 * gib, Created: now},
+	}
+}
+
+func TestHog_PausesDisposableOverCeilingWhileHealthy(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, hogProcs(), 70)
+	h.guard.Tick()
+	if !hasCall(h.sys.calls, syscall.SIGSTOP, 200) {
+		t.Errorf("disposable hog not stopped: %+v", h.sys.calls)
+	}
+	if hasCall(h.sys.calls, syscall.SIGSTOP, 300) {
+		t.Error("neutral process over ceiling was stopped")
+	}
+}
+
+func TestHog_EscalatesWhileOverCap(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, hogProcs(), 70)
+	h.guard.Tick()
+	*h.now = h.now.Add(2 * time.Minute)
+	h.guard.Tick()
+	if !hasCall(h.sys.calls, syscall.SIGTERM, 200) {
+		t.Fatalf("over-cap hog never termed: %+v", h.sys.calls)
+	}
+	*h.now = h.now.Add(20 * time.Second)
+	h.guard.Tick()
+	if !hasCall(h.sys.calls, syscall.SIGKILL, 200) {
+		t.Fatalf("over-cap hog never killed: %+v", h.sys.calls)
+	}
+}
+
+func TestHog_ResumedWhenBackUnderCap(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, hogProcs(), 70)
+	h.guard.Tick()
+	h.sys.procs[0].RSS = 3 * gib
+	h.guard.Tick()
+	if !hasCall(h.sys.calls, syscall.SIGCONT, 200) {
+		t.Errorf("hog under cap not resumed: %+v", h.sys.calls)
 	}
 }
 
