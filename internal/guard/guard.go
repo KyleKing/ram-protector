@@ -66,6 +66,8 @@ type held struct {
 	stoppedAt time.Time
 	termAt    time.Time
 	name      string
+	parent    string
+	cmdline   string
 	tree      []int32
 	rss       uint64
 	hog       bool
@@ -75,6 +77,8 @@ type pausedRecord struct {
 	Created   time.Time `json:"created"`
 	StoppedAt time.Time `json:"stopped_at"`
 	Name      string    `json:"name"`
+	Parent    string    `json:"parent,omitempty"`
+	Cmdline   string    `json:"cmdline,omitempty"`
 	RSS       uint64    `json:"rss"`
 	PID       int32     `json:"pid"`
 	Hog       bool      `json:"hog,omitempty"`
@@ -244,19 +248,19 @@ func (g *Guard) escalate(now time.Time, procs []proc.Proc, pressured bool) {
 			g.signalTree(h, syscall.SIGTERM, "term")
 			g.journal.Log(journal.Event{
 				Time: now, Kind: kindAction, Action: "term",
-				PID: pid, Name: h.name, RSS: h.rss, Msg: reason,
+				PID: pid, Name: h.name, RSS: h.rss, Msg: h.detail(reason, now),
 			})
-			g.alert("ram-protector", fmt.Sprintf("terminating %s (%s) — %s", h.name, gib(h.rss), reason))
 
 			continue
 		}
 		if now.Sub(h.termAt) >= g.cfg.KillAfter {
 			g.signalTree(h, syscall.SIGKILL, "kill")
+			detail := h.detail(reason, now)
 			g.journal.Log(journal.Event{
 				Time: now, Kind: kindAction, Action: "kill",
-				PID: pid, Name: h.name, RSS: h.rss, Msg: reason,
+				PID: pid, Name: h.name, RSS: h.rss, Msg: detail,
 			})
-			g.alert("ram-protector", fmt.Sprintf("killed %s (%s) — %s", h.name, gib(h.rss), reason))
+			g.alert("ram-protector", fmt.Sprintf("killed %s (%s) — %s", h.name, gib(h.rss), detail))
 			for _, tpid := range h.tree {
 				g.killed[tpid] = now
 			}
@@ -345,6 +349,7 @@ func (g *Guard) maybePauseHog(st mem.Status, procs []proc.Proc, now time.Time) {
 func (g *Guard) pauseTree(victim *scored, procs []proc.Proc, now time.Time, hog bool, msg string) {
 	h := &held{
 		name: victim.p.Name, rss: victim.p.RSS, created: victim.p.Created,
+		parent: parentName(victim.p.PPID, procs), cmdline: victim.p.Cmdline,
 		stoppedAt: now, tree: treeOf(victim.p.PID, procs), hog: hog,
 	}
 	g.held[victim.p.PID] = h
@@ -361,6 +366,45 @@ type scored struct {
 	reasons []string
 	p       proc.Proc
 	score   float64
+}
+
+// detail renders the diagnostic line shared by the journal and kill alerts:
+// trigger reason, what spawned the process, its age, and the command tail.
+func (h *held) detail(reason string, now time.Time) string {
+	d := reason
+	if h.parent != "" {
+		d += "; parent=" + h.parent
+	}
+	if !h.created.IsZero() {
+		d += "; age=" + now.Sub(h.created).Truncate(time.Second).String()
+	}
+	if h.cmdline != "" {
+		d += "; cmd=" + tailOf(h.cmdline)
+	}
+
+	return d
+}
+
+func parentName(ppid int32, procs []proc.Proc) string {
+	for _, p := range procs {
+		if p.PID == ppid {
+			return p.Name
+		}
+	}
+
+	return ""
+}
+
+const cmdTail = 140
+
+// tailOf keeps the end of a command line: the script path and project args
+// that identify which job it was, not the leading interpreter boilerplate.
+func tailOf(cmdline string) string {
+	if len(cmdline) <= cmdTail {
+		return cmdline
+	}
+
+	return "…" + cmdline[len(cmdline)-cmdTail:]
 }
 
 func (g *Guard) heldPIDs() map[int32]bool {
@@ -569,6 +613,7 @@ func (g *Guard) savePaused() {
 	for pid, h := range g.held {
 		recs = append(recs, pausedRecord{
 			PID: pid, Name: h.name, RSS: h.rss,
+			Parent: h.parent, Cmdline: h.cmdline,
 			Created: h.created, StoppedAt: h.stoppedAt, Hog: h.hog,
 		})
 	}
@@ -615,6 +660,7 @@ func (g *Guard) adopt() {
 		}
 		g.held[r.PID] = &held{
 			name: r.Name, rss: r.RSS, created: r.Created,
+			parent: r.Parent, cmdline: r.Cmdline,
 			stoppedAt: r.StoppedAt, tree: treeOf(r.PID, procs), hog: r.Hog,
 		}
 	}
