@@ -22,7 +22,8 @@
   events.jsonl`: `snapshot` every tick, `decision` (top-5 scored candidates +
   chosen action), `action`, `resume`. This doubles as the tuning dataset for
   observe mode.
-- `internal/notify` — Notification Center via `/usr/bin/osascript`
+- `internal/notify` — transient banners for pause/resume, sticky `display
+  alert` dialogs for TERM/KILL, one open at a time
 - `internal/service` — `~/Library/LaunchAgents/com.kyleking.ram-protector.plist`
   (KeepAlive, ProcessType=Background, LowPriorityIO)
 - `internal/config` — TOML at `~/.config/ram-protector/config.toml`; all fields
