@@ -243,9 +243,9 @@ func printCheck(cfg config.Config) error {
 	}
 	slices.SortFunc(rows, func(a, b ranked) int { return cmpFloat(b.s, a.s) })
 
-	fmt.Printf("memory available: %d%%   swap: %.1f/%.1f GB   warn<%d crit<%d\n",
+	fmt.Printf("memory available: %d%%   swap: %.1f/%.1f GB   warn<%d crit<%d hog>%dGB\n",
 		st.Level, float64(st.SwapUsed)/bytesPerGiB, float64(st.SwapTotal)/bytesPerGiB,
-		cfg.WarnLevel, cfg.CriticalLevel)
+		cfg.WarnLevel, cfg.CriticalLevel, mbBytes(cfg.HogMB)/bytesPerGiB)
 	fmt.Println("top victims by score:")
 	for i, rw := range rows {
 		if i >= showTop {
