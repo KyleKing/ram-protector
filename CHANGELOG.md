@@ -1,3 +1,15 @@
+## v0.4.0 (2026-11-09)
+
+### Feat
+
+- alert on kill only, with parent, age, and cmdline diagnostics
+- sticky alert dialogs for term/kill; tombstone killed pids
+
+### Fix
+
+- use display alert message parameter for sticky dialogs
+- show hog ceiling in check output
+
 ## v0.3.0 (2026-11-08)
 
 ### Feat
