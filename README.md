@@ -2,6 +2,11 @@
 
 Prevents CPU- and memory-hungry processes from crashing a Mac
 
+**macOS only.** The pressure signal is `kern.memorystatus_level`, victims are
+handled with POSIX signals, and the agent is a launchd LaunchAgent — none of
+which exist elsewhere. Other OSes compile (CI runs on Linux) but the daemon
+refuses to run, and Windows does not build at all.
+
 macOS never kills a runaway userspace process — it compresses memory, then
 grows swap until the VM deadlocks and the machine beach-balls or panics.
 sys-guardian is a lightweight LaunchAgent that watches `kern.memorystatus_level`

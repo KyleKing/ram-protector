@@ -5,7 +5,9 @@
 `cmd/sys-guardian` is a thin dispatcher over `internal/` packages:
 
 - `internal/mem` — `kern.memorystatus_level` (% physical memory available) +
-  swap/phys totals via gopsutil
+  swap/phys totals via gopsutil. The implementation is build-tagged darwin
+  with an erroring stub on other OSes, so Linux CI still compiles and lints
+  the package
 - `internal/proc` — process snapshot (pid, ppid, name, cmdline, RSS, CPU time,
   start time) via gopsutil
 - `internal/score` — victim ranking: RSS_GiB × tier × age × growth × cpu, with a
