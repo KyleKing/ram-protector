@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kyleking/ram-protector/internal/config"
-	"github.com/kyleking/ram-protector/internal/guard"
-	"github.com/kyleking/ram-protector/internal/journal"
-	"github.com/kyleking/ram-protector/internal/mem"
-	"github.com/kyleking/ram-protector/internal/proc"
-	"github.com/kyleking/ram-protector/internal/score"
+	"github.com/kyleking/sys-guardian/internal/config"
+	"github.com/kyleking/sys-guardian/internal/guard"
+	"github.com/kyleking/sys-guardian/internal/journal"
+	"github.com/kyleking/sys-guardian/internal/mem"
+	"github.com/kyleking/sys-guardian/internal/proc"
+	"github.com/kyleking/sys-guardian/internal/score"
 )
 
 const gib = 1 << 30

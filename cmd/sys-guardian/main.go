@@ -1,4 +1,4 @@
-// Package main implements ram-protector: Prevents multiple high-RAM processes from crashing a Mac
+// Package main implements sys-guardian: Prevents CPU- and memory-hungry processes from crashing a Mac
 package main
 
 import (
@@ -18,14 +18,14 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/kyleking/ram-protector/internal/config"
-	"github.com/kyleking/ram-protector/internal/guard"
-	"github.com/kyleking/ram-protector/internal/journal"
-	"github.com/kyleking/ram-protector/internal/mem"
-	"github.com/kyleking/ram-protector/internal/notify"
-	"github.com/kyleking/ram-protector/internal/proc"
-	"github.com/kyleking/ram-protector/internal/score"
-	"github.com/kyleking/ram-protector/internal/service"
+	"github.com/kyleking/sys-guardian/internal/config"
+	"github.com/kyleking/sys-guardian/internal/guard"
+	"github.com/kyleking/sys-guardian/internal/journal"
+	"github.com/kyleking/sys-guardian/internal/mem"
+	"github.com/kyleking/sys-guardian/internal/notify"
+	"github.com/kyleking/sys-guardian/internal/proc"
+	"github.com/kyleking/sys-guardian/internal/score"
+	"github.com/kyleking/sys-guardian/internal/service"
 )
 
 var (
@@ -86,7 +86,7 @@ func run(args []string) error {
 		args = args[1:]
 	}
 
-	fs := flag.NewFlagSet("ram-protector", flag.ContinueOnError)
+	fs := flag.NewFlagSet("sys-guardian", flag.ContinueOnError)
 	cfgPath := fs.String("config", config.Path(), "config file path")
 	tail := fs.Int("n", defaultTail, "events to show")
 	if err := fs.Parse(args); err != nil {
@@ -95,7 +95,7 @@ func run(args []string) error {
 
 	switch cmd {
 	case "-v", "--version", "version":
-		fmt.Printf("ram-protector %s (commit: %s, built: %s)\n", version, commit, date)
+		fmt.Printf("sys-guardian %s (commit: %s, built: %s)\n", version, commit, date)
 		return nil
 	case "-h", "--help", "help":
 		printHelp()
@@ -143,7 +143,7 @@ func runDaemon(cfg config.Config, eventsPath string) error {
 		notifier(cfg), alerter(cfg))
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	slog.Info("ram-protector starting", "mode", string(cfg.Mode), "log", eventsPath)
+	slog.Info("sys-guardian starting", "mode", string(cfg.Mode), "log", eventsPath)
 
 	return wrapRun(g.Run(ctx))
 }
@@ -349,10 +349,10 @@ func cmpFloat(a, b float64) int {
 }
 
 func printHelp() {
-	fmt.Printf(`ram-protector - Prevents multiple high-RAM processes from crashing a Mac
+	fmt.Printf(`sys-guardian - Prevents CPU- and memory-hungry processes from crashing a Mac
 
 Usage:
-  ram-protector [command] [options]
+  sys-guardian [command] [options]
 
 Commands:
   daemon      Run the monitor loop (default; launchd runs this)

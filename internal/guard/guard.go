@@ -15,11 +15,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kyleking/ram-protector/internal/config"
-	"github.com/kyleking/ram-protector/internal/journal"
-	"github.com/kyleking/ram-protector/internal/mem"
-	"github.com/kyleking/ram-protector/internal/proc"
-	"github.com/kyleking/ram-protector/internal/score"
+	"github.com/kyleking/sys-guardian/internal/config"
+	"github.com/kyleking/sys-guardian/internal/journal"
+	"github.com/kyleking/sys-guardian/internal/mem"
+	"github.com/kyleking/sys-guardian/internal/proc"
+	"github.com/kyleking/sys-guardian/internal/score"
 )
 
 const (
@@ -353,7 +353,7 @@ func (g *Guard) escalate(now time.Time, procs []proc.Proc, low, growing bool) {
 				Time: now, Kind: kindAction, Action: "kill",
 				PID: pid, Name: h.name, RSS: h.rss, Msg: detail,
 			})
-			g.alert("ram-protector", fmt.Sprintf("killed %s (%s) — %s", h.name, gib(h.rss), detail))
+			g.alert("sys-guardian", fmt.Sprintf("killed %s (%s) — %s", h.name, gib(h.rss), detail))
 			for _, tpid := range h.tree {
 				g.killed[tpid] = now
 			}
@@ -483,7 +483,7 @@ func (g *Guard) pauseTree(victim *scored, procs []proc.Proc, now time.Time, hog 
 		delete(g.held, victim.p.PID)
 		return
 	}
-	g.notify("ram-protector", msg)
+	g.notify("sys-guardian", msg)
 	g.savePaused()
 }
 
@@ -680,7 +680,7 @@ func (g *Guard) resumeAll(keep map[int32]bool) {
 	}
 	g.healthy = 0
 	g.journal.Log(journal.Event{Time: g.now(), Kind: "resume", Msg: strings.Join(names, ", ")})
-	g.notify("ram-protector", "resumed "+strings.Join(names, ", "))
+	g.notify("sys-guardian", "resumed "+strings.Join(names, ", "))
 	g.savePaused()
 }
 

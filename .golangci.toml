@@ -10,14 +10,14 @@ enable = ["gci", "gofmt", "gofumpt", "goimports"]
 sections = [
   "standard",
   "default",
-  "prefix(github.com/kyleking/ram-protector)",
+  "prefix(github.com/kyleking/sys-guardian)",
 ]
 
 [formatters.settings.gofumpt.extra]
 group-params = true
 
 [formatters.settings.goimports]
-local-prefixes = ["github.com/kyleking/ram-protector"]
+local-prefixes = ["github.com/kyleking/sys-guardian"]
 
 [linters]
 disable = [

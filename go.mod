@@ -1,4 +1,4 @@
-module github.com/kyleking/ram-protector
+module github.com/kyleking/sys-guardian
 
 go 1.26.0
 

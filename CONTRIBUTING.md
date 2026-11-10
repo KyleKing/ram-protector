@@ -1,4 +1,4 @@
-# Contributing to ram-protector
+# Contributing to sys-guardian
 
 ## Setup
 
@@ -63,7 +63,7 @@ Git hooks run automatically via hk on commit and push.
 Run straight from source with `go run`, which always reflects the current code, so there's no built binary or installed extension to go stale between edits:
 
 ```bash
-go run ./cmd/ram-protector [args]
+go run ./cmd/sys-guardian [args]
 ```
 
 Or through mise, which runs the same thing:
@@ -75,7 +75,7 @@ mise run dev [args]
 To test a Homebrew install, use the released version rather than installing from this checkout:
 
 ```bash
-brew install --cask kyleking/tap/ram-protector
+brew install --cask kyleking/tap/sys-guardian
 ```
 
 
@@ -100,14 +100,14 @@ Automated by the Bump Version workflow.
    gh release download <tag> -p checksums.txt -O - | awk '{print $1}' | sort -u | wc -l
    ```
 
-   Expect one line per binary. Names should read `ram-protector-linux-amd64`, `ram-protector-darwin-arm64`, `ram-protector-windows-amd64.exe`, and so on.
+   Expect one line per binary. Names should read `sys-guardian-linux-amd64`, `sys-guardian-darwin-arm64`, `sys-guardian-windows-amd64.exe`, and so on.
 
 ### Installing via Homebrew
 
 goreleaser builds the cask and pushes it to `https://github.com/kyleking/homebrew-tap` as part of the release, with the SHA256 values taken from the artifacts it just built:
 
 ```bash
-brew install --cask kyleking/tap/ram-protector
+brew install --cask kyleking/tap/sys-guardian
 ```
 
 The push needs a `TAP_DEPLOY_KEY` secret scoped to the tap repo; run `scripts/provision-tap-deploy-key.sh` to create it. Without the secret the release still publishes every binary and skips the cask with a warning.

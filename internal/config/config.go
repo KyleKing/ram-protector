@@ -88,7 +88,7 @@ func Default() Config {
 	return Config{
 		Mode:          ModeObserve,
 		Notify:        true,
-		LogDir:        filepath.Join(home(), "Library", "Logs", "ram-protector"),
+		LogDir:        filepath.Join(home(), "Library", "Logs", "sys-guardian"),
 		WarnLevel:     defaultWarnLevel,
 		CriticalLevel: defaultCriticalLevel,
 		ResumeLevel:   defaultResumeLevel,
@@ -111,7 +111,7 @@ func Default() Config {
 
 // Path is the default config file location.
 func Path() string {
-	return filepath.Join(home(), ".config", "ram-protector", "config.toml")
+	return filepath.Join(home(), ".config", "sys-guardian", "config.toml")
 }
 
 // Load reads path if it exists and overlays it on the defaults.

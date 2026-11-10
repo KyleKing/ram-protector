@@ -19,7 +19,7 @@ Set Framerate 15
 Env COLORTERM "truecolor"
 
 Hide
-Type "./ram-protector --help" Enter
+Type "./sys-guardian --help" Enter
 Show
 Wait+Screen /Usage:/
 Sleep 300ms

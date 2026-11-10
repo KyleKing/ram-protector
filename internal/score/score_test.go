@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kyleking/ram-protector/internal/proc"
-	"github.com/kyleking/ram-protector/internal/score"
+	"github.com/kyleking/sys-guardian/internal/proc"
+	"github.com/kyleking/sys-guardian/internal/score"
 )
 
 const gib = 1 << 30
@@ -37,7 +37,7 @@ func TestTierOf(t *testing.T) {
 		{name: "wezterm", proc: mkProc(4, "wezterm-gui", "wezterm-gui"), want: score.TierLastResort},
 		{name: "launchd", proc: mkProc(5, "launchd", "/sbin/launchd"), want: score.TierNever},
 		{name: "windowserver", proc: mkProc(6, "WindowServer", "/x/WindowServer -daemon"), want: score.TierNever},
-		{name: "self", proc: mkProc(7, "ram-protector", "ram-protector daemon"), want: score.TierNever},
+		{name: "self", proc: mkProc(7, "sys-guardian", "sys-guardian daemon"), want: score.TierNever},
 		{name: "mystery", proc: mkProc(8, "mystery", "mystery --flag"), want: score.TierNeutral},
 	}
 	sc := score.New(nil, nil, nil)

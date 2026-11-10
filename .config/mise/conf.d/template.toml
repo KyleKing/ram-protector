@@ -4,13 +4,13 @@ run = "go test -bench=. -benchmem -run=^$ ./..."
 
 [tasks.build]
 description = "Build binary"
-run = "go build -v -o ram-protector ./cmd/ram-protector"
+run = "go build -v -o sys-guardian ./cmd/sys-guardian"
 
 [tasks.ci]
 description = "Run all checks (used in GitHub Actions)"
 run = [
   "go test -v -coverprofile=coverage.out ./...",
-  "go build -v -o ram-protector ./cmd/ram-protector",
+  "go build -v -o sys-guardian ./cmd/sys-guardian",
 ]
 
 [tasks."verify-released"]
@@ -64,7 +64,7 @@ done
 
 [tasks.dev]
 description = "Run from source (always reflects current code, no stale build)"
-run = "go run ./cmd/ram-protector"
+run = "go run ./cmd/sys-guardian"
 raw_args = true
 
 [tasks.format]

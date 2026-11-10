@@ -7,8 +7,8 @@ before:
     - go test ./...
 
 builds:
-  - main: ./cmd/ram-protector
-    id: ram-protector
+  - main: ./cmd/sys-guardian
+    id: sys-guardian
     # A cgo-only dependency makes this matrix build cleanly and emit nothing
     # usable, because cgo cannot cross-compile. See "Releasing a project that
     # needs cgo" in the template README for the rework that path needs.
@@ -33,12 +33,12 @@ builds:
         goarch: "386"
       - goos: windows
         goarch: arm64
-    binary: ram-protector
+    binary: sys-guardian
 
 archives:
-  - id: ram-protector
+  - id: sys-guardian
     formats: [binary]
-    name_template: "ram-protector-{{ .Os }}-{{ .Arch }}"
+    name_template: "sys-guardian-{{ .Os }}-{{ .Arch }}"
 
 checksum:
   name_template: "checksums.txt"
@@ -60,7 +60,7 @@ release:
   prerelease: auto
 
 homebrew_casks:
-  - name: ram-protector
+  - name: sys-guardian
     # Pushed over SSH with a deploy key scoped to the tap repo, since GitHub
     # offers no API to mint PATs; provisioned by scripts/provision-tap-deploy-key.sh.
     repository:
@@ -69,8 +69,8 @@ homebrew_casks:
       git:
         url: git@github.com:kyleking/homebrew-tap.git
         private_key: '{{ envOrDefault "TAP_DEPLOY_KEY" "" }}'
-    homepage: https://github.com/kyleking/ram-protector
-    description: "Prevents multiple high-RAM processes from crashing a Mac"
+    homepage: https://github.com/kyleking/sys-guardian
+    description: "Prevents CPU- and memory-hungry processes from crashing a Mac"
     # Without the TAP_DEPLOY_KEY secret the tap push is skipped with a warning
     # and the rest of the release still publishes, so a project that has not
     # been provisioned yet needs no config change here.
@@ -79,6 +79,6 @@ homebrew_casks:
     hooks:
       post:
         install: |
-          Dir.glob(File.join(staged_path, "ram-protector*")).each do |f|
+          Dir.glob(File.join(staged_path, "sys-guardian*")).each do |f|
             system_command "/usr/bin/xattr", args: ["-c", f], must_succeed: false
           end

@@ -6,9 +6,9 @@ author_name: Kyle King
 author_username: kyleking
 copyright_date: '2026'
 development_branch: main
-module_path: github.com/kyleking/ram-protector
-project_description: Prevents multiple high-RAM processes from crashing a Mac
-project_name: ram-protector
+module_path: github.com/kyleking/sys-guardian
+project_description: Prevents CPU- and memory-hungry processes from crashing a Mac
+project_name: sys-guardian
 project_type: cli
 publish_python: false
 repository_namespace: kyleking

@@ -1,4 +1,4 @@
-# AI Agent Guidelines for ram-protector
+# AI Agent Guidelines for sys-guardian
 
 How to work in this Go project. Task and release mechanics live in
 [CONTRIBUTING.md](CONTRIBUTING.md), worked code examples live in
@@ -74,7 +74,7 @@ fixed by `git config --unset remote.origin.partialclonefilter` plus a
 
 ## Layout
 
-The entry point lives in `cmd/ram-protector/` and stays thin, delegating to
+The entry point lives in `cmd/sys-guardian/` and stays thin, delegating to
 `internal/`. The compiler blocks imports of `internal/` from outside this module,
 so anything under it can change freely.
 

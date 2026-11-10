@@ -2,7 +2,7 @@
 
 ## Architecture
 
-`cmd/ram-protector` is a thin dispatcher over `internal/` packages:
+`cmd/sys-guardian` is a thin dispatcher over `internal/` packages:
 
 - `internal/mem` — `kern.memorystatus_level` (% physical memory available) +
   swap/phys totals via gopsutil
@@ -20,15 +20,15 @@
   recovery reads as flapping, not relief.
   `paused.json` persists held victims so a restart re-adopts them (matched by
   PID + start time); `Run` resumes everything it paused on exit.
-- `internal/journal` — append-only JSONL at `~/Library/Logs/ram-protector/
+- `internal/journal` — append-only JSONL at `~/Library/Logs/sys-guardian/
   events.jsonl`: `snapshot` every tick, `decision` (top-5 scored candidates +
   chosen action), `action`, `resume`. This doubles as the tuning dataset for
   observe mode.
 - `internal/notify` — transient banners for pause/resume, sticky `display
   alert` dialogs for TERM/KILL, one open at a time
-- `internal/service` — `~/Library/LaunchAgents/com.kyleking.ram-protector.plist`
+- `internal/service` — `~/Library/LaunchAgents/com.kyleking.sys-guardian.plist`
   (KeepAlive, ProcessType=Background, LowPriorityIO)
-- `internal/config` — TOML at `~/.config/ram-protector/config.toml`; all fields
+- `internal/config` — TOML at `~/.config/sys-guardian/config.toml`; all fields
   optional
 
 ## Key decisions

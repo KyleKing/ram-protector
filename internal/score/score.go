@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kyleking/ram-protector/internal/proc"
+	"github.com/kyleking/sys-guardian/internal/proc"
 )
 
 // Tier is a disposability class: how safe a process is to pause or kill.
@@ -59,7 +59,7 @@ const (
 // line. Disposable processes are safe to stop: they respawn or lose nothing.
 var (
 	builtinNever = []string{
-		"ram-protector", "launchd", "kernel_task", "windowserver", "loginwindow",
+		"sys-guardian", "sys-guardian", "launchd", "kernel_task", "windowserver", "loginwindow",
 		"cfprefsd", "distnoted", "usernoted", "opendirectoryd", "diskarbitrationd",
 		"notifyd", "powerd", "systemstats",
 	}

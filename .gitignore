@@ -1,5 +1,5 @@
 # Built binary (from copier project_name)
-/ram-protector
+/sys-guardian
 
 # Changelog scratch file written by the commitizen action; goreleaser's dirty
 # check must not see it as untracked

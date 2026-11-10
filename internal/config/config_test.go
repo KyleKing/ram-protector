@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/kyleking/ram-protector/internal/config"
+	"github.com/kyleking/sys-guardian/internal/config"
 )
 
 func TestDefault_Validates(t *testing.T) {

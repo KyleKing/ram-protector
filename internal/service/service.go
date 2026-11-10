@@ -13,7 +13,7 @@ import (
 )
 
 // Label is the launchd job label.
-const Label = "com.kyleking.ram-protector"
+const Label = "com.kyleking.sys-guardian"
 
 const (
 	dirPerm  = 0o750

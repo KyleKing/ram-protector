@@ -82,7 +82,7 @@ func (w *Writer) Write(e Event) error {
 // Log wraps Write so callers can report failures without cluttering control flow.
 func (w *Writer) Log(e Event) {
 	if err := w.Write(e); err != nil {
-		fmt.Fprintf(os.Stderr, "ram-protector: journal write failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "sys-guardian: journal write failed: %v\n", err)
 	}
 }
 
