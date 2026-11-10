@@ -1,3 +1,10 @@
+## v1.0.0 (2026-11-10)
+
+### Feat
+
+- rename ram-protector to sys-guardian
+- hold victims through swap storms and pause sustained cpu burners
+
 ## v0.4.0 (2026-11-09)
 
 ### Feat
