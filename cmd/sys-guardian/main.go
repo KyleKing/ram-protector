@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -42,7 +43,10 @@ const (
 	showTop     = 10
 )
 
-var errUsage = errors.New("unknown command")
+var (
+	errUsage  = errors.New("unknown command")
+	errDarwin = errors.New("sys-guardian supports macOS only")
+)
 
 type sys struct{}
 
@@ -128,6 +132,9 @@ func run(args []string) error {
 }
 
 func runDaemon(cfg config.Config, eventsPath string) error {
+	if runtime.GOOS != "darwin" {
+		return errDarwin
+	}
 	jw, err := journal.New(eventsPath)
 	if err != nil {
 		return fmt.Errorf("opening journal: %w", err)

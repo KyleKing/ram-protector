@@ -100,7 +100,7 @@ Automated by the Bump Version workflow.
    gh release download <tag> -p checksums.txt -O - | awk '{print $1}' | sort -u | wc -l
    ```
 
-   Expect one line per binary. Names should read `sys-guardian-linux-amd64`, `sys-guardian-darwin-arm64`, `sys-guardian-windows-amd64.exe`, and so on.
+   Expect one line per binary: `sys-guardian-darwin-amd64` and `sys-guardian-darwin-arm64`.
 
 ### Installing via Homebrew
 
