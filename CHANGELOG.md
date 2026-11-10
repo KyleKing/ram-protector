@@ -1,3 +1,9 @@
+## v1.0.1 (2026-11-10)
+
+### Fix
+
+- compile on non-darwin so CI and goreleaser pass
+
 ## v1.0.0 (2026-11-10)
 
 ### Feat
