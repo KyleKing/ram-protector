@@ -25,6 +25,9 @@ import (
 const (
 	topN           = 5
 	kindAction     = "action"
+	kindDecision   = "decision"
+	verbStop       = "stop"
+	verbWouldStop  = "would_stop"
 	dirPerm        = 0o750
 	filePerm       = 0o600
 	gibShift       = 30
@@ -52,10 +55,26 @@ type Config struct {
 	// SwapSpikeBytes treats swap growing this much between ticks as warn-level
 	// pressure; memorystatus_level lags fast leaks on macOS. Zero disables it.
 	SwapSpikeBytes uint64
+	// SwapGrowthBytes is the per-tick swap growth that counts as the storm
+	// still running; spike-held victims escalate only while it holds.
+	// Zero disables it.
+	SwapGrowthBytes uint64
+	// SpikeHold keeps a swap spike counting as pressure for this long after
+	// the last spike (renewed by continued growth), so its victims are not
+	// resumed mid-storm. Zero disables it.
+	SpikeHold time.Duration
 	// HogBytes pauses a disposable process over this RSS even when the system
 	// is healthy; a slow leak otherwise never trips the pressure triggers.
 	// Zero disables it.
-	HogBytes     uint64
+	HogBytes uint64
+	// CPUBurnPct and CPUBurnFor pause a disposable process sustaining more
+	// than this %CPU for this long even when memory is healthy.
+	// Either zero disables it.
+	CPUBurnPct float64
+	CPUBurnFor time.Duration
+	// MinPause is the shortest time a victim stays stopped; a recovery faster
+	// than this reads as flapping, not relief. Zero disables it.
+	MinPause     time.Duration
 	PollHealthy  time.Duration
 	PollWarn     time.Duration
 	PollCritical time.Duration
@@ -94,18 +113,20 @@ func WithNow(now func() time.Time) Option {
 
 // Guard runs the evaluate/act loop.
 type Guard struct {
-	sys      Sys
-	scorer   *score.Scorer
-	journal  *journal.Writer
-	notify   func(title, body string)
-	alert    func(title, body string)
-	held     map[int32]*held
-	blocked  map[int32]bool
-	killed   map[int32]time.Time
-	now      func() time.Time
-	cfg      Config
-	healthy  int
-	prevSwap uint64
+	sys       Sys
+	scorer    *score.Scorer
+	journal   *journal.Writer
+	notify    func(title, body string)
+	alert     func(title, body string)
+	held      map[int32]*held
+	blocked   map[int32]bool
+	killed    map[int32]time.Time
+	burnSince map[int32]time.Time
+	now       func() time.Time
+	lastSpike time.Time
+	cfg       Config
+	healthy   int
+	prevSwap  uint64
 }
 
 // New builds a guard and, in protect mode, re-adopts processes a previous run
@@ -120,16 +141,17 @@ func New(cfg Config, sys Sys, sc *score.Scorer, jw *journal.Writer, notify, aler
 		alert = notify
 	}
 	g := &Guard{
-		cfg:     cfg,
-		sys:     sys,
-		scorer:  sc,
-		journal: jw,
-		notify:  notify,
-		alert:   alert,
-		held:    map[int32]*held{},
-		blocked: map[int32]bool{},
-		killed:  map[int32]time.Time{},
-		now:     time.Now,
+		cfg:       cfg,
+		sys:       sys,
+		scorer:    sc,
+		journal:   jw,
+		notify:    notify,
+		alert:     alert,
+		held:      map[int32]*held{},
+		blocked:   map[int32]bool{},
+		killed:    map[int32]time.Time{},
+		burnSince: map[int32]time.Time{},
+		now:       time.Now,
 	}
 	for _, opt := range opts {
 		opt(g)
@@ -185,6 +207,7 @@ func (g *Guard) Tick() time.Duration {
 		}
 	}
 	g.scorer.Observe(procs, now)
+	g.trackBurn(procs, now)
 	g.dropDead(procs)
 
 	var swapDelta uint64
@@ -192,56 +215,126 @@ func (g *Guard) Tick() time.Duration {
 		swapDelta = st.SwapUsed - g.prevSwap
 	}
 	g.prevSwap = st.SwapUsed
-	spiking := g.cfg.SwapSpikeBytes > 0 && swapDelta >= g.cfg.SwapSpikeBytes
+	spikeNow, growing := g.swapSignals(swapDelta, now)
+	low := st.Level < g.cfg.WarnLevel
+	pressured := low || g.inSpikeWindow(now)
 	g.journalSnapshot(st, procs, now, swapDelta)
+	g.maybeResume(st, procs, now, pressured)
 
-	if st.Level >= g.cfg.ResumeLevel {
-		g.healthy++
-	} else {
-		g.healthy = 0
-	}
-	if len(g.held) > 0 && g.healthy >= g.cfg.ResumeTicks {
-		g.resumeAll(g.stillOverCap(procs))
-	}
-
-	pressured := st.Level < g.cfg.WarnLevel || spiking
-	g.escalate(now, procs, pressured)
-	if pressured {
-		g.maybePause(st, procs, now, spiking)
-	} else {
-		g.maybePauseHog(st, procs, now)
+	g.escalate(now, procs, low, growing && pressured)
+	if low || spikeNow {
+		g.maybePause(st, procs, now, spikeNow)
+	} else if !g.maybePauseHog(st, procs, now) {
+		g.maybePauseBurn(st, procs, now)
 	}
 
-	return g.intervalFor(st, spiking)
+	return g.intervalFor(st, pressured)
 }
 
-func (g *Guard) intervalFor(st mem.Status, spiking bool) time.Duration {
+func (g *Guard) intervalFor(st mem.Status, pressured bool) time.Duration {
 	switch {
 	case st.Level < g.cfg.CriticalLevel:
 		return g.cfg.PollCritical
-	case len(g.held) > 0 || spiking:
+	case len(g.held) > 0 || pressured:
 		return g.cfg.PollWarn
 	default:
 		return g.cfg.PollHealthy
 	}
 }
 
+// swapSignals classifies this tick's swap delta. A spike opens (or renews)
+// the pressure window; growth renews it only while one is already open.
+func (g *Guard) swapSignals(swapDelta uint64, now time.Time) (bool, bool) {
+	spikeNow := g.cfg.SwapSpikeBytes > 0 && swapDelta >= g.cfg.SwapSpikeBytes
+	growing := g.cfg.SwapGrowthBytes > 0 && swapDelta >= g.cfg.SwapGrowthBytes
+	if spikeNow || (growing && g.inSpikeWindow(now)) {
+		g.lastSpike = now
+	}
+
+	return spikeNow, growing
+}
+
+// maybeResume counts unpressured healthy reads and releases held victims
+// once enough land in a row.
+func (g *Guard) maybeResume(st mem.Status, procs []proc.Proc, now time.Time, pressured bool) {
+	if st.Level >= g.cfg.ResumeLevel && !pressured {
+		g.healthy++
+	} else {
+		g.healthy = 0
+	}
+	if len(g.held) > 0 && g.healthy >= g.cfg.ResumeTicks {
+		g.resumeAll(g.keepPaused(procs, now))
+	}
+}
+
+// inSpikeWindow reports whether a swap spike (or the growth continuing one)
+// is still fresh enough to count as pressure.
+func (g *Guard) inSpikeWindow(now time.Time) bool {
+	return g.cfg.SpikeHold > 0 && now.Sub(g.lastSpike) < g.cfg.SpikeHold
+}
+
+// keepPaused returns held victims that must stay stopped on a resume pass:
+// hogs still over their ceiling plus anything younger than MinPause.
+func (g *Guard) keepPaused(procs []proc.Proc, now time.Time) map[int32]bool {
+	keep := g.stillOverCap(procs)
+	for pid, h := range g.held {
+		if now.Sub(h.stoppedAt) < g.cfg.MinPause {
+			if keep == nil {
+				keep = map[int32]bool{}
+			}
+			keep[pid] = true
+		}
+	}
+
+	return keep
+}
+
+// trackBurn maintains when each process first crossed the CPU burn
+// threshold; the timer resets the tick a process cools off or exits.
+func (g *Guard) trackBurn(procs []proc.Proc, now time.Time) {
+	if g.cfg.CPUBurnPct <= 0 {
+		return
+	}
+	burning := make(map[int32]bool, len(g.burnSince))
+	for _, p := range procs {
+		if cpu, ok := g.scorer.RecentCPU(p, now); ok && cpu > g.cfg.CPUBurnPct {
+			burning[p.PID] = true
+			if _, seen := g.burnSince[p.PID]; !seen {
+				g.burnSince[p.PID] = now
+			}
+		}
+	}
+	for pid := range g.burnSince {
+		if !burning[pid] {
+			delete(g.burnSince, pid)
+		}
+	}
+}
+
 // escalate advances held victims along pause -> TERM -> KILL while pressure
-// stays below warn. Between warn and resume they stay paused, untouched —
-// except hogs, which advance while they remain over the ceiling: a paused
-// process frees almost nothing, so holding it forever protects nothing.
-func (g *Guard) escalate(now time.Time, procs []proc.Proc, pressured bool) {
+// persists: a low memory level, or swap still growing inside a spike window.
+// Between warn and resume they stay paused, untouched — except hogs, which
+// advance while they remain over the ceiling: a paused process frees almost
+// nothing, so holding it forever protects nothing.
+func (g *Guard) escalate(now time.Time, procs []proc.Proc, low, growing bool) {
 	overCap := g.stillOverCap(procs)
 	for pid, h := range g.held {
-		if !pressured && !overCap[pid] {
+		if h.hog {
+			if !overCap[pid] {
+				continue
+			}
+		} else if !low && !growing {
 			continue
 		}
 		if now.Sub(h.stoppedAt) < g.cfg.TermAfter {
 			continue
 		}
 		reason := "pressure stayed below warn"
-		if !pressured {
+		switch {
+		case h.hog:
 			reason = "stayed over the process ceiling"
+		case !low:
+			reason = "swap kept growing"
 		}
 		if h.termAt.IsZero() {
 			h.termAt = now
@@ -290,17 +383,21 @@ func (g *Guard) stillOverCap(procs []proc.Proc) map[int32]bool {
 	return keep
 }
 
-// maybePause picks the single worst offender and SIGSTOPs it with its tree.
-func (g *Guard) maybePause(st mem.Status, procs []proc.Proc, now time.Time, spiking bool) {
-	victim, top := g.pickVictim(st, procs)
-	dry := g.cfg.Mode == config.ModeObserve
-
-	verb := "stop"
-	if dry {
-		verb = "would_stop"
+// dryVerb renders the action journal verb for the current mode.
+func (g *Guard) dryVerb() (string, bool) {
+	if g.cfg.Mode == config.ModeObserve {
+		return verbWouldStop, true
 	}
-	ev := journal.Event{Time: now, Kind: "decision", Level: st.Level, Dry: dry, Top: top}
-	if spiking && st.Level >= g.cfg.WarnLevel {
+
+	return verbStop, false
+}
+
+// maybePause picks the single worst offender and SIGSTOPs it with its tree.
+func (g *Guard) maybePause(st mem.Status, procs []proc.Proc, now time.Time, spikeNow bool) {
+	victim, top := g.pickVictim(st, procs)
+	verb, dry := g.dryVerb()
+	ev := journal.Event{Time: now, Kind: kindDecision, Level: st.Level, Dry: dry, Top: top}
+	if spikeNow && st.Level >= g.cfg.WarnLevel {
 		ev.Msg = "trigger=swap_spike"
 	}
 	if victim != nil {
@@ -320,28 +417,56 @@ func (g *Guard) maybePause(st mem.Status, procs []proc.Proc, now time.Time, spik
 }
 
 // maybePauseHog freezes a disposable process over the RSS ceiling while the
-// system is otherwise healthy.
-func (g *Guard) maybePauseHog(st mem.Status, procs []proc.Proc, now time.Time) {
+// system is otherwise healthy. Reports whether a victim was paused.
+func (g *Guard) maybePauseHog(st mem.Status, procs []proc.Proc, now time.Time) bool {
 	if g.cfg.HogBytes == 0 {
-		return
+		return false
 	}
-	victim, top := g.pickHog(procs, now)
+	victim, top := g.pickDisposable(procs, now, func(p proc.Proc) bool {
+		return p.RSS >= g.cfg.HogBytes
+	})
 	if victim == nil {
-		return
+		return false
 	}
-	dry := g.cfg.Mode == config.ModeObserve
-	verb := "stop"
-	if dry {
-		verb = "would_stop"
-	}
+	verb, dry := g.dryVerb()
 	g.journal.Log(journal.Event{
-		Time: now, Kind: "decision", Level: st.Level, Dry: dry, Top: top,
+		Time: now, Kind: kindDecision, Level: st.Level, Dry: dry, Top: top,
 		Action: verb, PID: victim.p.PID, Name: victim.p.Name, RSS: victim.p.RSS,
 		Msg: "trigger=hog_ceiling",
 	})
 	msg := fmt.Sprintf("paused %s (%s) — over the process ceiling.",
 		victim.p.Name, gib(victim.p.RSS))
 	g.pauseTree(victim, procs, now, true, msg)
+
+	return true
+}
+
+// maybePauseBurn freezes a disposable process that has sustained the CPU
+// burn threshold for CPUBurnFor while the system is otherwise healthy.
+// Reports whether a victim was paused.
+func (g *Guard) maybePauseBurn(st mem.Status, procs []proc.Proc, now time.Time) bool {
+	if g.cfg.CPUBurnPct <= 0 || g.cfg.CPUBurnFor <= 0 {
+		return false
+	}
+	victim, top := g.pickDisposable(procs, now, func(p proc.Proc) bool {
+		since, ok := g.burnSince[p.PID]
+		return ok && now.Sub(since) >= g.cfg.CPUBurnFor
+	})
+	if victim == nil {
+		return false
+	}
+	verb, dry := g.dryVerb()
+	cpu, _ := g.scorer.RecentCPU(victim.p, now)
+	g.journal.Log(journal.Event{
+		Time: now, Kind: kindDecision, Level: st.Level, Dry: dry, Top: top,
+		Action: verb, PID: victim.p.PID, Name: victim.p.Name, RSS: victim.p.RSS,
+		Msg: fmt.Sprintf("trigger=cpu_burn cpu=%d%%", int(cpu)),
+	})
+	msg := fmt.Sprintf("paused %s — burning %.0f%% CPU for %s.",
+		victim.p.Name, cpu, g.cfg.CPUBurnFor)
+	g.pauseTree(victim, procs, now, false, msg)
+
+	return true
 }
 
 // pauseTree holds the victim, SIGSTOPs its tree, notifies, and persists.
@@ -463,14 +588,16 @@ func (g *Guard) pickVictim(st mem.Status, procs []proc.Proc) (*scored, []journal
 	return &cands[0], top
 }
 
-// pickHog scores disposable processes over the RSS ceiling; only they are
-// eligible while the system is healthy.
-func (g *Guard) pickHog(procs []proc.Proc, now time.Time) (*scored, []journal.Candidate) {
+// pickDisposable scores disposable processes that satisfy eligible; only
+// they are eligible while the system is healthy.
+func (g *Guard) pickDisposable(procs []proc.Proc, now time.Time,
+	eligible func(proc.Proc) bool,
+) (*scored, []journal.Candidate) {
 	heldSet := g.heldPIDs()
 	cands := make([]scored, 0, len(procs))
 	for _, p := range procs {
 		if heldSet[p.PID] || g.blocked[p.PID] || !g.killed[p.PID].IsZero() ||
-			p.RSS < g.cfg.HogBytes {
+			p.RSS < g.cfg.MemFloorBytes || !eligible(p) {
 			continue
 		}
 		if g.scorer.TierOf(p) != score.TierDisposable {

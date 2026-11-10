@@ -73,6 +73,12 @@ type harness struct {
 
 func newHarness(t *testing.T, procs []proc.Proc, level int) *harness {
 	t.Helper()
+
+	return newHarnessCfg(t, procs, level, nil)
+}
+
+func newHarnessCfg(t *testing.T, procs []proc.Proc, level int, tweak func(*guard.Config)) *harness {
+	t.Helper()
 	dir := t.TempDir()
 	jw, err := journal.New(filepath.Join(dir, "events.jsonl"))
 	if err != nil {
@@ -80,7 +86,7 @@ func newHarness(t *testing.T, procs []proc.Proc, level int) *harness {
 	}
 	fs := &fakeSys{level: level, procs: procs, deny: map[int32]bool{}}
 	now := time.Now()
-	g := guard.New(guard.Config{
+	cfg := guard.Config{
 		Mode:           config.ModeProtect,
 		WarnLevel:      20,
 		CriticalLevel:  8,
@@ -95,7 +101,12 @@ func newHarness(t *testing.T, procs []proc.Proc, level int) *harness {
 		PollWarn:       time.Second,
 		PollCritical:   time.Millisecond,
 		PausedFile:     filepath.Join(dir, "paused.json"),
-	}, fs, score.New(nil, nil, nil), jw, nil, nil, guard.WithNow(func() time.Time { return now }))
+	}
+	if tweak != nil {
+		tweak(&cfg)
+	}
+	g := guard.New(cfg, fs, score.New(nil, nil, nil), jw, nil, nil,
+		guard.WithNow(func() time.Time { return now }))
 
 	return &harness{sys: fs, guard: g, now: &now}
 }
@@ -132,6 +143,152 @@ func TestSwapSpike_PausesDespiteHealthyLevel(t *testing.T) {
 	h.guard.Tick()
 	if !hasCall(h.sys.calls, syscall.SIGSTOP, 100) {
 		t.Errorf("swap spike at healthy level paused no victim: %+v", h.sys.calls)
+	}
+}
+
+func spikeHarness(t *testing.T, procs []proc.Proc) *harness {
+	t.Helper()
+
+	return newHarnessCfg(t, procs, 70, func(c *guard.Config) {
+		c.SpikeHold = 2 * time.Minute
+		c.SwapGrowthBytes = 128 << 20
+	})
+}
+
+func TestSwapSpike_HeldThroughWindowThenResumed(t *testing.T) {
+	t.Parallel()
+	h := spikeHarness(t, tscTree())
+	h.sys.swapUsed = 5 * gib
+	h.guard.Tick()
+	h.sys.swapUsed += 2 * gib
+	h.guard.Tick()
+	if !hasCall(h.sys.calls, syscall.SIGSTOP, 100) {
+		t.Fatalf("spike paused no victim: %+v", h.sys.calls)
+	}
+	h.guard.Tick()
+	h.guard.Tick()
+	if hasCall(h.sys.calls, syscall.SIGCONT, 100) {
+		t.Error("resumed during the spike window while swap pressure stood")
+	}
+	*h.now = h.now.Add(3 * time.Minute)
+	h.guard.Tick()
+	h.guard.Tick()
+	if !hasCall(h.sys.calls, syscall.SIGCONT, 100) {
+		t.Error("not resumed after the window closed on healthy reads")
+	}
+}
+
+func TestSwapSpike_EscalatesOnlyWhileSwapGrows(t *testing.T) {
+	t.Parallel()
+	h := spikeHarness(t, tscTree())
+	h.sys.swapUsed = 5 * gib
+	h.guard.Tick()
+	h.sys.swapUsed += 2 * gib
+	h.guard.Tick()
+
+	// Swap flat inside the window: past TermAfter but no growth, so no TERM.
+	*h.now = h.now.Add(90 * time.Second)
+	h.guard.Tick()
+	if hasCall(h.sys.calls, syscall.SIGTERM, 100) {
+		t.Fatal("escalated on a flat swap tail; only growth should keep the ladder live")
+	}
+
+	// Growth resumes inside the window: the ladder is live again.
+	h.sys.swapUsed += 256 << 20
+	*h.now = h.now.Add(10 * time.Second)
+	h.guard.Tick()
+	h.sys.swapUsed += 256 << 20
+	*h.now = h.now.Add(20 * time.Second)
+	h.guard.Tick()
+	if !hasCall(h.sys.calls, syscall.SIGTERM, 100) {
+		t.Fatalf("no TERM while swap kept growing: %+v", h.sys.calls)
+	}
+	h.sys.swapUsed += 256 << 20
+	*h.now = h.now.Add(20 * time.Second)
+	h.guard.Tick()
+	if !hasCall(h.sys.calls, syscall.SIGKILL, 100) {
+		t.Fatalf("no KILL while swap kept growing: %+v", h.sys.calls)
+	}
+}
+
+func TestMinPause_SurvivesImmediateRecovery(t *testing.T) {
+	t.Parallel()
+	h := newHarnessCfg(t, tscTree(), 15, func(c *guard.Config) {
+		c.MinPause = 2 * time.Minute
+	})
+	h.guard.Tick()
+	h.sys.level = 35
+	h.guard.Tick()
+	h.guard.Tick()
+	if hasCall(h.sys.calls, syscall.SIGCONT, 100) {
+		t.Error("resumed inside MinPause on the first healthy reads")
+	}
+	*h.now = h.now.Add(3 * time.Minute)
+	h.guard.Tick()
+	if !hasCall(h.sys.calls, syscall.SIGCONT, 100) {
+		t.Error("not resumed once MinPause elapsed on healthy reads")
+	}
+}
+
+func burnProcs() []proc.Proc {
+	now := time.Now()
+
+	return []proc.Proc{
+		{PID: 100, PPID: 1, Name: "node", Cmdline: "node tsc --watch", RSS: 4 * gib, Created: now},
+		{PID: 300, PPID: 1, Name: "app", Cmdline: "app", RSS: 5 * gib, Created: now},
+	}
+}
+
+func burnHarness(t *testing.T) *harness {
+	t.Helper()
+
+	return newHarnessCfg(t, burnProcs(), 70, func(c *guard.Config) {
+		c.CPUBurnPct = 150
+		c.CPUBurnFor = time.Minute
+	})
+}
+
+// burnTick advances the clock and feeds each process cpuSec of CPU time.
+func burnTick(h *harness, cpuSec float64) {
+	*h.now = h.now.Add(30 * time.Second)
+	for i := range h.sys.procs {
+		h.sys.procs[i].CPUTotal += cpuSec
+	}
+	h.guard.Tick()
+}
+
+func TestCPUBurn_PausesDisposableSustainedBurner(t *testing.T) {
+	t.Parallel()
+	h := burnHarness(t)
+	h.guard.Tick()
+	burnTick(h, 90) // 300% CPU: burn timer starts
+	burnTick(h, 90) // 30s sustained: under the threshold duration
+	if hasCall(h.sys.calls, syscall.SIGSTOP, 100) {
+		t.Fatal("stopped before the burn duration elapsed")
+	}
+	burnTick(h, 90) // 60s sustained: over the threshold duration
+	if !hasCall(h.sys.calls, syscall.SIGSTOP, 100) {
+		t.Errorf("sustained disposable burner not stopped: %+v", h.sys.calls)
+	}
+	if hasCall(h.sys.calls, syscall.SIGSTOP, 300) {
+		t.Error("non-disposable burner was stopped")
+	}
+}
+
+func TestCPUBurn_ShortBurstIgnored(t *testing.T) {
+	t.Parallel()
+	h := burnHarness(t)
+	h.guard.Tick()
+	burnTick(h, 90)
+	burnTick(h, 0) // cooled off: the burn timer must reset
+	burnTick(h, 90)
+	burnTick(h, 90) // only 30s of continuous burn since the reset
+	if hasCall(h.sys.calls, syscall.SIGSTOP, 100) {
+		t.Error("stopped on a short burst; the cool-off did not reset the timer")
+	}
+	burnTick(h, 90) // 60s continuous now: the pause is due
+	if !hasCall(h.sys.calls, syscall.SIGSTOP, 100) {
+		t.Error("sustained burner never stopped after the reset")
 	}
 }
 

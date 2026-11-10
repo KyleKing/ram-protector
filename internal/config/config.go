@@ -56,6 +56,11 @@ type Config struct {
 	CriticalLevel int      `toml:"critical_level"`
 	WarnLevel     int      `toml:"warn_level"`
 	SwapSpikeMB   int      `toml:"swap_spike_mb"`
+	SwapGrowthMB  int      `toml:"swap_growth_mb"`
+	SpikeHold     Duration `toml:"spike_hold"`
+	MinPause      Duration `toml:"min_pause"`
+	CPUBurnPct    int      `toml:"cpu_burn_pct"`
+	CPUBurnFor    Duration `toml:"cpu_burn_for"`
 	Notify        bool     `toml:"notify"`
 }
 
@@ -72,7 +77,9 @@ const (
 	defaultResumeTicks   = 2
 	defaultMemFloorMB    = 512
 	defaultSwapSpikeMB   = 1024
+	defaultSwapGrowthMB  = 128
 	defaultHogMB         = 6144
+	defaultCPUBurnPct    = 150
 )
 
 // Default returns the zero-config configuration: observe mode, journal and
@@ -94,6 +101,11 @@ func Default() Config {
 		MemFloorMB:    defaultMemFloorMB,
 		HogMB:         defaultHogMB,
 		SwapSpikeMB:   defaultSwapSpikeMB,
+		SwapGrowthMB:  defaultSwapGrowthMB,
+		SpikeHold:     Duration{2 * time.Minute},
+		MinPause:      Duration{2 * time.Minute},
+		CPUBurnPct:    defaultCPUBurnPct,
+		CPUBurnFor:    Duration{2 * time.Minute},
 	}
 }
 

@@ -14,8 +14,10 @@
   cmdline. Only the previous snapshot per PID is kept.
 - `internal/guard` — the state machine. One victim per tick:
   SIGSTOP the tree (parent first, so it can't re-fork) → TERM deepest-first
-  after `term_after` if pressure stays below warn → SIGKILL after `kill_after`.
-  Resume (SIGCONT) after `resume_ticks` consecutive reads ≥ `resume_level`.
+  after `term_after` if pressure persists → SIGKILL after `kill_after`.
+  Resume (SIGCONT) after `resume_ticks` consecutive reads ≥ `resume_level`
+  with no pressure, and never before `min_pause` has elapsed — a faster
+  recovery reads as flapping, not relief.
   `paused.json` persists held victims so a restart re-adopts them (matched by
   PID + start time); `Run` resumes everything it paused on exit.
 - `internal/journal` — append-only JSONL at `~/Library/Logs/ram-protector/
@@ -45,6 +47,14 @@
   macOS absorbs them by swapping first (observed: +6 GB swap in 90s while level
   stayed ≥34). Swap growth between ticks past `swap_spike_mb` therefore counts
   as warn-level pressure; `swap_delta` is journaled per snapshot for tuning.
+  A spike stays pressure for `spike_hold` (renewed while swap keeps growing
+  past `swap_growth_mb`), which both blocks resume mid-storm and keeps the
+  TERM/KILL ladder reachable — spike victims escalate only while swap still
+  grows, so a single spike that goes flat only holds, never kills.
+- **CPU burn trigger.** A disposable process sustaining more than
+  `cpu_burn_pct` for `cpu_burn_for` is paused even at healthy memory; the
+  timer resets the tick it cools off, and after resume it must burn the full
+  duration again before it is re-paused.
 - **Hog ceiling for slow leaks.** A leak creeping a few MB per minute trips
   neither signal, so a disposable process over `hog_mb` is stopped even when
   the system is healthy. Because a paused process frees almost nothing, hogs

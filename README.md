@@ -61,7 +61,12 @@ mode = "protect"
 # kill_after = "10s"     # SIGTERM → SIGKILL grace
 # mem_floor_mb = 512     # ignore smaller processes
 # hog_mb = 6144          # disposable process over this is stopped even when healthy
-# swap_spike_mb = 1024   # swap growing this fast counts as warn-level pressure
+# swap_spike_mb = 1024   # swap growing this fast per tick counts as warn-level pressure
+# swap_growth_mb = 128   # swap still growing past this keeps spike victims escalating
+# spike_hold = "2m"      # a spike stays pressure for this long (blocks resume)
+# min_pause = "2m"       # a stopped victim is never resumed sooner than this
+# cpu_burn_pct = 150     # disposable process over this %CPU sustained for...
+# cpu_burn_for = "2m"    #   ...this long is paused even when memory is healthy
 # extra_disposable = ["my-tool"]
 # extra_never = ["do-not-touch"]   # extra_* lists override built-ins by tier
 ```

@@ -200,6 +200,21 @@ func ageFactor(age time.Duration) (float64, string) {
 	}
 }
 
+// RecentCPU reports p's CPU usage between the previous and current
+// snapshots, or false until a second observation exists.
+func (s *Scorer) RecentCPU(p proc.Proc, now time.Time) (float64, bool) {
+	prev, ok := s.prev[p.PID]
+	if !ok || !prev.at.Before(now) {
+		return 0, false
+	}
+	elapsed := now.Sub(prev.at).Seconds()
+	if elapsed <= 0 {
+		return 0, false
+	}
+
+	return (p.CPUTotal - prev.cpu) / elapsed * percent, true
+}
+
 func (s *Scorer) growthFactor(p proc.Proc, now time.Time) (float64, string) {
 	prev, ok := s.prev[p.PID]
 	if !ok || !prev.at.Before(now) {
@@ -209,9 +224,7 @@ func (s *Scorer) growthFactor(p proc.Proc, now time.Time) (float64, string) {
 	delta, grew := rssDelta(p.RSS, prev.rss)
 	mult, reason := growthMult(delta, grew), growthReason(delta, grew)
 
-	elapsed := now.Sub(prev.at).Seconds()
-	if elapsed > 0 {
-		recentCPU := (p.CPUTotal - prev.cpu) / elapsed * percent
+	if recentCPU, ok := s.RecentCPU(p, now); ok {
 		switch {
 		case recentCPU > cpuBurning:
 			mult *= multCPUBurning
