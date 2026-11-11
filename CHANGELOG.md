@@ -1,3 +1,13 @@
+## v1.3.0 (2026-11-11)
+
+### Feat
+
+- **score**: protect established processes past stable_age
+
+### Fix
+
+- **score**: treat app-bundle processes as last-resort
+
 ## v1.2.0 (2026-11-11)
 
 ### Feat
