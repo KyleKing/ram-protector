@@ -61,6 +61,9 @@ type Config struct {
 	MinPause      Duration `toml:"min_pause"`
 	CPUBurnPct    int      `toml:"cpu_burn_pct"`
 	CPUBurnFor    Duration `toml:"cpu_burn_for"`
+	LoadFor       Duration `toml:"load_for"`
+	LoadPerCore   float64  `toml:"load_per_core"`
+	LoadResume    float64  `toml:"load_resume_per_core"`
 	Notify        bool     `toml:"notify"`
 }
 
@@ -80,6 +83,8 @@ const (
 	defaultSwapGrowthMB  = 128
 	defaultHogMB         = 6144
 	defaultCPUBurnPct    = 150
+	defaultLoadPerCore   = 1.5
+	defaultLoadResume    = 0.8
 )
 
 // Default returns the zero-config configuration: observe mode, journal and
@@ -106,6 +111,9 @@ func Default() Config {
 		MinPause:      Duration{2 * time.Minute},
 		CPUBurnPct:    defaultCPUBurnPct,
 		CPUBurnFor:    Duration{2 * time.Minute},
+		LoadPerCore:   defaultLoadPerCore,
+		LoadResume:    defaultLoadResume,
+		LoadFor:       Duration{90 * time.Second},
 	}
 }
 

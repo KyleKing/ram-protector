@@ -29,10 +29,11 @@ type fakeSys struct {
 	calls    []call
 	level    int
 	swapUsed uint64
+	load1    float64
 }
 
 func (f *fakeSys) Memory() (mem.Status, error) {
-	return mem.Status{Level: f.level, SwapUsed: f.swapUsed}, nil
+	return mem.Status{Level: f.level, SwapUsed: f.swapUsed, Load1: f.load1}, nil
 }
 func (f *fakeSys) Processes() ([]proc.Proc, error) { return f.procs, nil }
 func (f *fakeSys) Signal(pid int32, sig syscall.Signal) error {
@@ -289,6 +290,94 @@ func TestCPUBurn_ShortBurstIgnored(t *testing.T) {
 	burnTick(h, 90) // 60s continuous now: the pause is due
 	if !hasCall(h.sys.calls, syscall.SIGSTOP, 100) {
 		t.Error("sustained burner never stopped after the reset")
+	}
+}
+
+func loadProcs() []proc.Proc {
+	now := time.Now()
+
+	return []proc.Proc{
+		{PID: 400, PPID: 1, Name: "python3.12", Cmdline: "python -u -c worker", RSS: 200 << 20, Created: now},
+		{PID: 401, PPID: 1, Name: "python3.12", Cmdline: "python -u -c worker", RSS: 180 << 20, Created: now},
+		{PID: 70, PPID: 1, Name: "wezterm-gui", Cmdline: "wezterm-gui", RSS: gib, Created: now},
+	}
+}
+
+func loadHarness(t *testing.T) *harness {
+	t.Helper()
+
+	return newHarnessCfg(t, loadProcs(), 70, func(c *guard.Config) {
+		c.LoadPerCore = 1.5
+		c.LoadResumePerCore = 0.8
+		c.LoadFor = time.Minute
+		c.NumCores = 10
+	})
+}
+
+// feedCPU advances the clock and credits each process with cpu seconds so the
+// scorer sees differential burn between ticks.
+func feedCPU(h *harness, dt time.Duration, cpuByPID map[int32]float64) {
+	*h.now = h.now.Add(dt)
+	for i := range h.sys.procs {
+		h.sys.procs[i].CPUTotal += cpuByPID[h.sys.procs[i].PID]
+	}
+}
+
+func TestLoad_PausesTopCPUConsumerAfterSustained(t *testing.T) {
+	t.Parallel()
+	h := loadHarness(t)
+	h.sys.load1 = 30 // 3.0 per core, over the 1.5 trigger
+	h.guard.Tick()   // establishes the previous CPU sample
+	feedCPU(h, 30*time.Second, map[int32]float64{400: 60, 401: 9, 70: 90})
+	h.guard.Tick() // 30s sustained: under LoadFor
+	if len(h.sys.calls) != 0 {
+		t.Fatalf("stopped during the burn-in window: %+v", h.sys.calls)
+	}
+	feedCPU(h, 30*time.Second, map[int32]float64{400: 60, 401: 9, 70: 90})
+	h.guard.Tick() // 60s sustained: storm is active
+	if !hasCall(h.sys.calls, syscall.SIGSTOP, 400) {
+		t.Errorf("top CPU consumer not stopped under load: %+v", h.sys.calls)
+	}
+	if hasCall(h.sys.calls, syscall.SIGSTOP, 70) {
+		t.Error("last-resort process was stopped; interactive tiers must stay protected")
+	}
+}
+
+func TestLoad_ResumesWhenLoadClears(t *testing.T) {
+	t.Parallel()
+	h := loadHarness(t)
+	h.sys.load1 = 30
+	h.guard.Tick()
+	feedCPU(h, 30*time.Second, map[int32]float64{400: 60, 70: 90})
+	h.guard.Tick()
+	feedCPU(h, 30*time.Second, map[int32]float64{400: 60, 70: 90})
+	h.guard.Tick()
+	if !hasCall(h.sys.calls, syscall.SIGSTOP, 400) {
+		t.Fatalf("load storm paused no victim: %+v", h.sys.calls)
+	}
+	h.sys.load1 = 4 // 0.4 per core: under the resume threshold
+	h.guard.Tick()
+	h.guard.Tick()
+	if !hasCall(h.sys.calls, syscall.SIGCONT, 400) {
+		t.Error("victim not resumed once the storm cleared")
+	}
+}
+
+func TestLoad_BurstDoesNotTrigger(t *testing.T) {
+	t.Parallel()
+	h := loadHarness(t)
+	h.guard.Tick()
+	h.sys.load1 = 30
+	feedCPU(h, 30*time.Second, map[int32]float64{400: 60})
+	h.guard.Tick()
+	h.sys.load1 = 10 // dips below trigger: the sustained timer must reset
+	feedCPU(h, 30*time.Second, map[int32]float64{400: 60})
+	h.guard.Tick()
+	h.sys.load1 = 30
+	feedCPU(h, 30*time.Second, map[int32]float64{400: 60})
+	h.guard.Tick()
+	if hasCall(h.sys.calls, syscall.SIGSTOP, 400) {
+		t.Error("stopped on a load burst; the dip should have reset the timer")
 	}
 }
 

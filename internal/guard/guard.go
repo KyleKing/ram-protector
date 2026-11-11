@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -72,6 +73,16 @@ type Config struct {
 	// Either zero disables it.
 	CPUBurnPct float64
 	CPUBurnFor time.Duration
+	// LoadPerCore pauses the top CPU consumer when load1 per core stays above
+	// this for LoadFor; a distributed storm never trips per-process burn.
+	// Zero disables it.
+	LoadPerCore float64
+	LoadFor     time.Duration
+	// LoadResumePerCore clears the storm once load1 per core drops below it.
+	// Zero uses half of LoadPerCore.
+	LoadResumePerCore float64
+	// NumCores divides load1 into a per-core figure; zero uses runtime.NumCPU.
+	NumCores int
 	// MinPause is the shortest time a victim stays stopped; a recovery faster
 	// than this reads as flapping, not relief. Zero disables it.
 	MinPause     time.Duration
@@ -113,20 +124,22 @@ func WithNow(now func() time.Time) Option {
 
 // Guard runs the evaluate/act loop.
 type Guard struct {
-	sys       Sys
-	scorer    *score.Scorer
-	journal   *journal.Writer
-	notify    func(title, body string)
-	alert     func(title, body string)
-	held      map[int32]*held
-	blocked   map[int32]bool
-	killed    map[int32]time.Time
-	burnSince map[int32]time.Time
-	now       func() time.Time
-	lastSpike time.Time
-	cfg       Config
-	healthy   int
-	prevSwap  uint64
+	sys        Sys
+	scorer     *score.Scorer
+	journal    *journal.Writer
+	notify     func(title, body string)
+	alert      func(title, body string)
+	held       map[int32]*held
+	blocked    map[int32]bool
+	killed     map[int32]time.Time
+	burnSince  map[int32]time.Time
+	now        func() time.Time
+	lastSpike  time.Time
+	loadSince  time.Time
+	cfg        Config
+	healthy    int
+	prevSwap   uint64
+	loadActive bool
 }
 
 // New builds a guard and, in protect mode, re-adopts processes a previous run
@@ -207,6 +220,7 @@ func (g *Guard) Tick() time.Duration {
 	}
 	g.scorer.Observe(procs, now)
 	g.trackBurn(procs, now)
+	g.trackLoad(st, now)
 	g.dropDead(procs)
 
 	var swapDelta uint64
@@ -216,7 +230,7 @@ func (g *Guard) Tick() time.Duration {
 	g.prevSwap = st.SwapUsed
 	spikeNow, growing := g.swapSignals(swapDelta, now)
 	low := st.Level < g.cfg.WarnLevel
-	pressured := low || g.inSpikeWindow(now)
+	pressured := low || g.inSpikeWindow(now) || g.loadActive
 	g.journalSnapshot(st, procs, now, swapDelta)
 	g.maybeResume(st, procs, now, pressured)
 
@@ -224,7 +238,9 @@ func (g *Guard) Tick() time.Duration {
 	if low || spikeNow {
 		g.maybePause(st, procs, now, spikeNow)
 	} else if !g.maybePauseHog(st, procs, now) {
-		g.maybePauseBurn(st, procs, now)
+		if !g.maybePauseBurn(st, procs, now) {
+			g.maybePauseLoad(st, procs, now)
+		}
 	}
 
 	return g.intervalFor(st, pressured)
@@ -251,6 +267,45 @@ func (g *Guard) swapSignals(swapDelta uint64, now time.Time) (bool, bool) {
 	}
 
 	return spikeNow, growing
+}
+
+// minVictimCPU keeps the load trigger from pausing noise: below this %CPU a
+// process contributes too little to a storm to be worth freezing.
+const minVictimCPU = 10.0
+
+// trackLoad maintains the storm flag: load1 per core sustained over
+// LoadPerCore for LoadFor activates it, and it stays active until the load
+// falls under LoadResumePerCore. The band between them is hysteresis.
+func (g *Guard) trackLoad(st mem.Status, now time.Time) {
+	if g.cfg.LoadPerCore <= 0 {
+		return
+	}
+	resume := g.cfg.LoadResumePerCore
+	if resume <= 0 {
+		resume = g.cfg.LoadPerCore / 2
+	}
+	switch perCore := st.Load1 / float64(g.cores()); {
+	case perCore >= g.cfg.LoadPerCore:
+		if g.loadSince.IsZero() {
+			g.loadSince = now
+		}
+		if now.Sub(g.loadSince) >= g.cfg.LoadFor {
+			g.loadActive = true
+		}
+	case perCore < resume:
+		g.loadSince = time.Time{}
+		g.loadActive = false
+	default:
+		g.loadSince = time.Time{}
+	}
+}
+
+func (g *Guard) cores() int {
+	if g.cfg.NumCores > 0 {
+		return g.cfg.NumCores
+	}
+
+	return runtime.NumCPU()
 }
 
 // maybeResume counts unpressured healthy reads and releases held victims
@@ -468,6 +523,32 @@ func (g *Guard) maybePauseBurn(st mem.Status, procs []proc.Proc, now time.Time) 
 	return true
 }
 
+// maybePauseLoad freezes the biggest CPU burner once a system load storm has
+// been sustained. SIGSTOP alone relieves it — these victims escalate only
+// under real memory pressure like any other held process.
+// Reports whether a victim was paused.
+func (g *Guard) maybePauseLoad(st mem.Status, procs []proc.Proc, now time.Time) bool {
+	if !g.loadActive {
+		return false
+	}
+	victim, top := g.pickByCPU(procs, now)
+	if victim == nil {
+		return false
+	}
+	verb, dry := g.dryVerb()
+	cpu, _ := g.scorer.RecentCPU(victim.p, now)
+	g.journal.Log(journal.Event{
+		Time: now, Kind: kindDecision, Level: st.Level, Dry: dry, Top: top,
+		Action: verb, PID: victim.p.PID, Name: victim.p.Name, RSS: victim.p.RSS,
+		Msg: fmt.Sprintf("trigger=system_load cpu=%d%%", int(cpu)),
+	})
+	msg := fmt.Sprintf("paused %s — load storm, burning %.0f%% CPU.",
+		victim.p.Name, cpu)
+	g.pauseTree(victim, procs, now, false, msg)
+
+	return true
+}
+
 // pauseTree holds the victim, SIGSTOPs its tree, notifies, and persists.
 // A victim whose stop failed is dropped rather than tracked as held.
 func (g *Guard) pauseTree(victim *scored, procs []proc.Proc, now time.Time, hog bool, msg string) {
@@ -607,6 +688,39 @@ func (g *Guard) pickDisposable(procs []proc.Proc, now time.Time,
 			continue
 		}
 		cands = append(cands, scored{p: p, score: s, reasons: reasons})
+	}
+	slices.SortFunc(cands, func(a, b scored) int {
+		return cmpFloat(b.score, a.score)
+	})
+
+	top := topCandidates(cands)
+	if len(cands) == 0 {
+		return nil, top
+	}
+
+	return &cands[0], top
+}
+
+// pickByCPU ranks disposable and neutral processes by recent CPU burn for the
+// load trigger; interactive tiers stay protected even mid-storm.
+func (g *Guard) pickByCPU(procs []proc.Proc, now time.Time) (*scored, []journal.Candidate) {
+	heldSet := g.heldPIDs()
+	cands := make([]scored, 0, len(procs))
+	for _, p := range procs {
+		if heldSet[p.PID] || g.blocked[p.PID] || !g.killed[p.PID].IsZero() {
+			continue
+		}
+		if tier := g.scorer.TierOf(p); tier != score.TierDisposable && tier != score.TierNeutral {
+			continue
+		}
+		cpu, ok := g.scorer.RecentCPU(p, now)
+		if !ok || cpu < minVictimCPU {
+			continue
+		}
+		cands = append(cands, scored{
+			p: p, score: cpu,
+			reasons: []string{fmt.Sprintf("cpu=%d%%", int(cpu))},
+		})
 	}
 	slices.SortFunc(cands, func(a, b scored) int {
 		return cmpFloat(b.score, a.score)
