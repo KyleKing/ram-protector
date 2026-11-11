@@ -4,12 +4,13 @@
 
 `cmd/sys-guardian` is a thin dispatcher over `internal/` packages:
 
-- `internal/mem` — `kern.memorystatus_level` (% physical memory available) +
-  swap/phys totals via gopsutil. The implementation is build-tagged darwin
-  with an erroring stub on other OSes, so Linux CI still compiles and lints
-  the package
+- `internal/mem` — `kern.memorystatus_level` (% physical memory available),
+  load1/5/15, and swap/phys totals via gopsutil. The implementation is
+  build-tagged darwin with an erroring stub on other OSes, so Linux CI still
+  compiles and lints the package
 - `internal/proc` — process snapshot (pid, ppid, name, cmdline, RSS, CPU time,
-  start time) via gopsutil
+  start time) via one bulk `kern.proc.all` read plus one `proc_pidinfo` per
+  process; gopsutil supplies the non-darwin fallback
 - `internal/score` — victim ranking: RSS_GiB × tier × age × growth × cpu, with a
   human-readable reason per factor for the journal. Tiers: `never` >
   `disposable` > `last_resort` > `neutral`, matched as substrings over name +
@@ -23,13 +24,14 @@
   `paused.json` persists held victims so a restart re-adopts them (matched by
   PID + start time); `Run` resumes everything it paused on exit.
 - `internal/journal` — append-only JSONL at `~/Library/Logs/sys-guardian/
-  events.jsonl`: `snapshot` every tick, `decision` (top-5 scored candidates +
-  chosen action), `action`, `resume`. This doubles as the tuning dataset for
+  events.jsonl`: `snapshot` every tick (level, swap, load averages, top-5 by
+  RSS and by recent CPU), `decision` (top-5 scored candidates + chosen
+  action), `action`, `resume`. This doubles as the tuning dataset for
   observe mode.
 - `internal/notify` — transient banners for pause/resume, sticky `display
   alert` dialogs for TERM/KILL, one open at a time
 - `internal/service` — `~/Library/LaunchAgents/com.kyleking.sys-guardian.plist`
-  (KeepAlive, ProcessType=Background, LowPriorityIO)
+  (KeepAlive, ProcessType=Interactive so launchd sheds the daemon last)
 - `internal/config` — TOML at `~/.config/sys-guardian/config.toml`; all fields
   optional
 
@@ -57,6 +59,15 @@
   `cpu_burn_pct` for `cpu_burn_for` is paused even at healthy memory; the
   timer resets the tick it cools off, and after resume it must burn the full
   duration again before it is re-paused.
+- **System load trigger.** A single runaway trips `cpu_burn`, but a
+  distributed storm — N workers at ~25% each — never does. When load1 per
+  core sustains over `load_per_core` for `load_for`, the biggest CPU
+  consumer in the disposable or neutral tier is paused once per tick;
+  SIGSTOP alone relieves it, so no escalation ladder runs. The storm keeps
+  counting as pressure (blocking resume) until load1 per core drops under
+  `load_resume_per_core`. `kern.memorystatus_level` stayed at 40–75%
+  throughout a real storm that crashed three apps and got the daemon itself
+  reaped by launchd — memory signals alone could not see it.
 - **Hog ceiling for slow leaks.** A leak creeping a few MB per minute trips
   neither signal, so a disposable process over `hog_mb` is stopped even when
   the system is healthy. Because a paused process frees almost nothing, hogs
