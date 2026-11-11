@@ -59,13 +59,13 @@ then flip to `protect`:
 mode = "protect"
 
 # All optional — defaults shown:
-# warn_level = 45        # act below this % memory available
+# warn_level = 35        # act below this % memory available
 # critical_level = 30    # last-resort tier eligible below this
 # resume_level = 55      # SIGCONT held processes above this
-# term_after = "45s"     # paused this long under pressure → SIGTERM
-# kill_after = "10s"     # SIGTERM → SIGKILL grace
+# term_after = "2m"      # paused this long under pressure → SIGTERM
+# kill_after = "30s"     # SIGTERM → SIGKILL grace
 # mem_floor_mb = 512     # ignore smaller processes
-# hog_mb = 6144          # disposable process over this is stopped even when healthy
+# hog_mb = 12288         # disposable over this is frozen even when healthy; killed only under pressure
 # swap_spike_mb = 1024   # swap growing this fast per tick counts as warn-level pressure
 # swap_growth_mb = 128   # swap still growing past this keeps spike victims escalating
 # spike_hold = "2m"      # a spike stays pressure for this long (blocks resume)

@@ -74,14 +74,14 @@ var (
 
 // Default threshold and timing values, documented in README.
 const (
-	defaultWarnLevel     = 45
+	defaultWarnLevel     = 35
 	defaultCriticalLevel = 30
 	defaultResumeLevel   = 55
 	defaultResumeTicks   = 2
 	defaultMemFloorMB    = 512
 	defaultSwapSpikeMB   = 1024
 	defaultSwapGrowthMB  = 128
-	defaultHogMB         = 6144
+	defaultHogMB         = 12288
 	defaultCPUBurnPct    = 150
 	defaultLoadPerCore   = 1.5
 	defaultLoadResume    = 0.8
@@ -101,8 +101,8 @@ func Default() Config {
 		PollHealthy:   Duration{30 * time.Second},
 		PollWarn:      Duration{5 * time.Second},
 		PollCritical:  Duration{1 * time.Second},
-		TermAfter:     Duration{45 * time.Second},
-		KillAfter:     Duration{10 * time.Second},
+		TermAfter:     Duration{2 * time.Minute},
+		KillAfter:     Duration{30 * time.Second},
 		MemFloorMB:    defaultMemFloorMB,
 		HogMB:         defaultHogMB,
 		SwapSpikeMB:   defaultSwapSpikeMB,
