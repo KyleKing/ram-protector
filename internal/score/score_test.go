@@ -81,6 +81,28 @@ func TestTierOf_UserNeverOverridesDisposable(t *testing.T) {
 	}
 }
 
+func TestTierOf_StableAge(t *testing.T) {
+	t.Parallel()
+	sc := score.New(nil, nil, nil, score.WithStableAge(30*time.Minute))
+
+	old := mkProc(1, "node", "node /x/typescript/bin/tsc --watch")
+	old.Created = time.Now().Add(-time.Hour)
+	if got := sc.TierOf(old); got != score.TierLastResort {
+		t.Errorf("established tsc TierOf = %d, want TierLastResort", got)
+	}
+
+	young := mkProc(2, "node", "node /x/typescript/bin/tsc --watch")
+	if got := sc.TierOf(young); got != score.TierDisposable {
+		t.Errorf("fresh tsc TierOf = %d, want TierDisposable", got)
+	}
+
+	oldNever := mkProc(3, "launchd", "/sbin/launchd")
+	oldNever.Created = time.Now().Add(-time.Hour)
+	if got := sc.TierOf(oldNever); got != score.TierNever {
+		t.Errorf("established launchd TierOf = %d, want TierNever", got)
+	}
+}
+
 func TestScore(t *testing.T) {
 	t.Parallel()
 	now := time.Now()

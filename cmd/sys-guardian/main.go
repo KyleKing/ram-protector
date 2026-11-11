@@ -146,7 +146,8 @@ func runDaemon(cfg config.Config, eventsPath string) error {
 	}()
 
 	g := guard.New(guardConfig(cfg), sys{},
-		score.New(cfg.Disposable, cfg.LastResort, cfg.Never), jw,
+		score.New(cfg.Disposable, cfg.LastResort, cfg.Never,
+			score.WithStableAge(cfg.StableAge.Duration)), jw,
 		notifier(cfg), alerter(cfg))
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -269,7 +270,8 @@ func printCheck(cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("listing processes: %w", err)
 	}
-	sc := score.New(cfg.Disposable, cfg.LastResort, cfg.Never)
+	sc := score.New(cfg.Disposable, cfg.LastResort, cfg.Never,
+		score.WithStableAge(cfg.StableAge.Duration))
 	now := time.Now()
 
 	rows := make([]ranked, 0, showTop)

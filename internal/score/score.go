@@ -106,10 +106,20 @@ type Scorer struct {
 	disposable []string
 	lastResort []string
 	never      []string
+	stableAge  time.Duration
+}
+
+// Option configures a Scorer.
+type Option func(*Scorer)
+
+// WithStableAge treats processes older than d as established: they are
+// last-resort victims whatever their pattern tier. Zero disables.
+func WithStableAge(d time.Duration) Option {
+	return func(s *Scorer) { s.stableAge = d }
 }
 
 // New merges the built-in tier lists with user extras.
-func New(extraDisposable, extraLastResort, extraNever []string) *Scorer {
+func New(extraDisposable, extraLastResort, extraNever []string, opts ...Option) *Scorer {
 	lower := func(in []string) []string {
 		out := make([]string, len(in))
 		for i, s := range in {
@@ -119,13 +129,18 @@ func New(extraDisposable, extraLastResort, extraNever []string) *Scorer {
 		return out
 	}
 
-	return &Scorer{
+	sc := &Scorer{
 		disposable: append(lower(builtinDisposable), lower(extraDisposable)...),
 		lastResort: append(lower(builtinLastResort), lower(extraLastResort)...),
 		never:      append(lower(builtinNever), lower(extraNever)...),
 		cur:        make(map[int32]sample),
 		prev:       make(map[int32]sample),
 	}
+	for _, opt := range opts {
+		opt(sc)
+	}
+
+	return sc
 }
 
 // TierOf classifies a process. Narrower guarantees win: never beats
@@ -135,7 +150,7 @@ func (s *Scorer) TierOf(p proc.Proc) Tier {
 	if matches(s.never, text) {
 		return TierNever
 	}
-	if isAppBundle(p) {
+	if isAppBundle(p) || s.isStable(p) {
 		return TierLastResort
 	}
 	if matches(s.disposable, text) {
@@ -152,6 +167,12 @@ func (s *Scorer) TierOf(p proc.Proc) Tier {
 // GUI, so a stop is a kill — app processes are only victims at critical.
 func isAppBundle(p proc.Proc) bool {
 	return strings.Contains(p.Cmdline, ".app/")
+}
+
+// An established process holds state a respawn cannot restore, so it only
+// becomes a victim at critical pressure.
+func (s *Scorer) isStable(p proc.Proc) bool {
+	return s.stableAge > 0 && !p.Created.IsZero() && time.Since(p.Created) >= s.stableAge
 }
 
 func isPlatform(p proc.Proc) bool {

@@ -15,8 +15,10 @@
   human-readable reason per factor for the journal. Tiers: `never` >
   `disposable` > `last_resort` > `neutral`, matched as substrings over name +
   cmdline; Apple platform binaries (argv[0] under `/System`, `/usr/libexec`,
-  `/usr/sbin`, `/sbin`) land in `last_resort`. Only the previous snapshot per
-  PID is kept.
+  `/usr/sbin`, `/sbin`), app-bundle executables (argv containing `.app/` — a
+  paused app dies to its parent's watchdog or hangs the GUI), and processes
+  older than `stable_age` (established state a respawn can't restore) all land
+  in `last_resort`. Only the previous snapshot per PID is kept.
 - `internal/guard` — the state machine. One victim per tick:
   SIGSTOP the tree (parent first, so it can't re-fork) → TERM deepest-first
   after `term_after` if pressure persists → SIGKILL after `kill_after`.

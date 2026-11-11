@@ -70,6 +70,7 @@ mode = "protect"
 # swap_growth_mb = 128   # swap still growing past this keeps spike victims escalating
 # spike_hold = "2m"      # a spike stays pressure for this long (blocks resume)
 # min_pause = "2m"       # a stopped victim is never resumed sooner than this
+# stable_age = "30m"     # processes older than this are established → last_resort
 # cpu_burn_pct = 150     # disposable process over this %CPU sustained for...
 # cpu_burn_for = "2m"    #   ...this long is paused even when memory is healthy
 # load_per_core = 1.5    # load1/core above this for load_for is a CPU storm

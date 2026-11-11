@@ -59,6 +59,7 @@ type Config struct {
 	SwapGrowthMB  int      `toml:"swap_growth_mb"`
 	SpikeHold     Duration `toml:"spike_hold"`
 	MinPause      Duration `toml:"min_pause"`
+	StableAge     Duration `toml:"stable_age"`
 	CPUBurnPct    int      `toml:"cpu_burn_pct"`
 	CPUBurnFor    Duration `toml:"cpu_burn_for"`
 	LoadFor       Duration `toml:"load_for"`
@@ -109,6 +110,7 @@ func Default() Config {
 		SwapGrowthMB:  defaultSwapGrowthMB,
 		SpikeHold:     Duration{2 * time.Minute},
 		MinPause:      Duration{2 * time.Minute},
+		StableAge:     Duration{30 * time.Minute},
 		CPUBurnPct:    defaultCPUBurnPct,
 		CPUBurnFor:    Duration{2 * time.Minute},
 		LoadPerCore:   defaultLoadPerCore,
