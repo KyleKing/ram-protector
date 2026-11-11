@@ -1,3 +1,15 @@
+## v1.2.0 (2026-11-11)
+
+### Feat
+
+- **score**: classify apple platform binaries as last-resort
+
+### Fix
+
+- **score**: never target virtualization vms
+- **config**: retune defaults toward leniency
+- **guard**: spare hogs and respawns until real pressure
+
 ## v1.1.0 (2026-11-11)
 
 ### Feat
