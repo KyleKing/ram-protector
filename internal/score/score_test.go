@@ -49,7 +49,7 @@ func TestTierOf(t *testing.T) {
 		},
 		{
 			proc: mkProc(11, "com.apple.Virtualization.VirtualMachine", "com.apple.Virtualization.VirtualMachine"),
-			want: score.TierLastResort, name: "virtual machine",
+			want: score.TierNever, name: "virtual machine",
 		},
 		{name: "homebrew sbin", proc: mkProc(12, "mtr", "/opt/homebrew/sbin/mtr"), want: score.TierNeutral},
 	}

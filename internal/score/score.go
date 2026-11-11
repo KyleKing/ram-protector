@@ -62,6 +62,9 @@ var (
 		"sys-guardian", "sys-guardian", "launchd", "kernel_task", "windowserver", "loginwindow",
 		"cfprefsd", "distnoted", "usernoted", "opendirectoryd", "diskarbitrationd",
 		"notifyd", "powerd", "systemstats",
+		// A stopped VM frees nothing and trips Docker's watchdog — pause is a
+		// kill with extra delay.
+		"com.apple.virtualization",
 	}
 	builtinDisposable = []string{
 		"tsc", "tsserver", "eslint", "prettier", "biome", "jest", "vitest",
@@ -78,7 +81,6 @@ var (
 		"nvim", "vim", "google chrome", "safari", "firefox", "arc",
 		"brave", "edge", "finder", "dock", "systemuiserver", "controlcenter",
 		"slack", "discord", "zoom", "spotify", "signal", "messages", "mail",
-		"com.apple.virtualization",
 	}
 )
 
