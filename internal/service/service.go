@@ -20,6 +20,8 @@ const (
 	filePerm = 0o600
 )
 
+// ProcessType=Interactive keeps app-level resource limits: Background-class
+// jobs are what launchd sheds first as "inefficient" under load.
 const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -30,8 +32,7 @@ const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 	<key>RunAtLoad</key><true/>
 	<key>KeepAlive</key><true/>
 	<key>ThrottleInterval</key><integer>10</integer>
-	<key>ProcessType</key><string>Background</string>
-	<key>LowPriorityIO</key><true/>
+	<key>ProcessType</key><string>Interactive</string>
 	<key>StandardOutPath</key><string>%s/daemon.log</string>
 	<key>StandardErrorPath</key><string>%s/daemon.log</string>
 </dict>
