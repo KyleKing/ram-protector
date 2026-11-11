@@ -5,6 +5,7 @@ package mem
 import (
 	"fmt"
 
+	"github.com/shirou/gopsutil/v4/load"
 	gopsmem "github.com/shirou/gopsutil/v4/mem"
 	"golang.org/x/sys/unix"
 )
@@ -23,11 +24,18 @@ func Read() (Status, error) {
 	if err != nil {
 		return Status{}, fmt.Errorf("reading swap usage: %w", err)
 	}
+	avg, err := load.Avg()
+	if err != nil {
+		return Status{}, fmt.Errorf("reading load average: %w", err)
+	}
 
 	return Status{
 		Level:     int(level),
 		SwapUsed:  swap.Used,
 		SwapTotal: swap.Total,
 		PhysTotal: vmem.Total,
+		Load1:     avg.Load1,
+		Load5:     avg.Load5,
+		Load15:    avg.Load15,
 	}, nil
 }

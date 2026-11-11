@@ -726,8 +726,31 @@ func (g *Guard) journalSnapshot(st mem.Status, procs []proc.Proc, now time.Time,
 	}
 	g.journal.Log(journal.Event{
 		Time: now, Kind: "snapshot", Level: st.Level,
-		Top: top, SwapDelta: swapDelta, Msg: "swap=" + gib(st.SwapUsed),
+		Load1: st.Load1, Load5: st.Load5, Load15: st.Load15,
+		Top: top, TopCPU: g.topCPU(procs, now),
+		SwapDelta: swapDelta, Msg: "swap=" + gib(st.SwapUsed),
 	})
+}
+
+// topCPU ranks processes by CPU burn since the previous snapshot; the first
+// tick after start has no previous sample, so the list can be empty.
+func (g *Guard) topCPU(procs []proc.Proc, now time.Time) []journal.Candidate {
+	cpus := make([]journal.Candidate, 0, len(procs))
+	for _, p := range procs {
+		cpu, ok := g.scorer.RecentCPU(p, now)
+		if !ok {
+			continue
+		}
+		cpus = append(cpus, journal.Candidate{PID: p.PID, Name: p.Name, RSS: p.RSS, CPU: cpu})
+	}
+	slices.SortFunc(cpus, func(a, b journal.Candidate) int {
+		return cmpFloat(b.CPU, a.CPU)
+	})
+	if len(cpus) > topN {
+		cpus = cpus[:topN]
+	}
+
+	return cpus
 }
 
 // savePaused persists the held set so a restart can re-adopt it.

@@ -18,6 +18,7 @@ type Candidate struct {
 	RSS    uint64  `json:"rss"`
 	Score  float64 `json:"score"`
 	PID    int32   `json:"pid"`
+	CPU    float64 `json:"cpu,omitempty"`
 }
 
 // Event is one JSONL record. Kind is one of: snapshot, decision, action,
@@ -30,7 +31,12 @@ type Event struct {
 	Msg    string      `json:"msg,omitempty"`
 	Tree   []int32     `json:"tree,omitempty"`
 	Top    []Candidate `json:"top,omitempty"`
+	// TopCPU is the top processes by recent CPU since the previous snapshot.
+	TopCPU []Candidate `json:"top_cpu,omitempty"`
 	Level  int         `json:"level,omitempty"`
+	Load1  float64     `json:"load1,omitempty"`
+	Load5  float64     `json:"load5,omitempty"`
+	Load15 float64     `json:"load15,omitempty"`
 	RSS    uint64      `json:"rss,omitempty"`
 	// SwapDelta is bytes of swap growth since the previous snapshot.
 	SwapDelta uint64  `json:"swap_delta,omitempty"`

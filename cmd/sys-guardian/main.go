@@ -339,8 +339,12 @@ func formatEvent(e journal.Event) string {
 		if e.SwapDelta > 0 {
 			dswap = fmt.Sprintf(" dswap=+%.1fGB", float64(e.SwapDelta)/bytesPerGiB)
 		}
+		load := ""
+		if e.Load1 > 0 {
+			load = fmt.Sprintf(" load1=%.1f", e.Load1)
+		}
 
-		return fmt.Sprintf("%s %-8s lvl=%d%% %s%s%s", ts, e.Kind, e.Level, e.Msg, dswap, dry)
+		return fmt.Sprintf("%s %-8s lvl=%d%%%s %s%s%s", ts, e.Kind, e.Level, load, e.Msg, dswap, dry)
 	}
 }
 
