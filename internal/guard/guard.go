@@ -167,14 +167,13 @@ func New(cfg Config, sys Sys, sc *score.Scorer, jw *journal.Writer, notify, aler
 func (g *Guard) Run(ctx context.Context) error {
 	defer g.resumeAll(nil)
 
-	interval := g.cfg.PollHealthy
 	for {
+		interval := g.Tick()
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-time.After(interval):
 		}
-		interval = g.Tick()
 	}
 }
 
