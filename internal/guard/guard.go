@@ -32,7 +32,7 @@ const (
 	dirPerm        = 0o750
 	filePerm       = 0o600
 	gibShift       = 30
-	killedCooldown = 2 * time.Minute
+	killedCooldown = 5 * time.Minute
 )
 
 // Sys is the boundary the guard acts through; tests substitute a fake.
@@ -66,6 +66,7 @@ type Config struct {
 	SpikeHold time.Duration
 	// HogBytes pauses a disposable process over this RSS even when the system
 	// is healthy; a slow leak otherwise never trips the pressure triggers.
+	// It stays frozen until real pressure escalates it like any held victim.
 	// Zero disables it.
 	HogBytes uint64
 	// CPUBurnPct and CPUBurnFor pause a disposable process sustaining more
@@ -131,7 +132,7 @@ type Guard struct {
 	alert      func(title, body string)
 	held       map[int32]*held
 	blocked    map[int32]bool
-	killed     map[int32]time.Time
+	killed     map[string]time.Time
 	burnSince  map[int32]time.Time
 	now        func() time.Time
 	lastSpike  time.Time
@@ -162,7 +163,7 @@ func New(cfg Config, sys Sys, sc *score.Scorer, jw *journal.Writer, notify, aler
 		alert:     alert,
 		held:      map[int32]*held{},
 		blocked:   map[int32]bool{},
-		killed:    map[int32]time.Time{},
+		killed:    map[string]time.Time{},
 		burnSince: map[int32]time.Time{},
 		now:       time.Now,
 	}
@@ -213,9 +214,9 @@ func (g *Guard) Tick() time.Duration {
 		return g.cfg.PollWarn
 	}
 	now := g.now()
-	for pid, t := range g.killed {
+	for key, t := range g.killed {
 		if now.Sub(t) >= killedCooldown {
-			delete(g.killed, pid)
+			delete(g.killed, key)
 		}
 	}
 	g.scorer.Observe(procs, now)
@@ -371,27 +372,22 @@ func (g *Guard) trackBurn(procs []proc.Proc, now time.Time) {
 
 // escalate advances held victims along pause -> TERM -> KILL while pressure
 // persists: a low memory level, or swap still growing inside a spike window.
-// Between warn and resume they stay paused, untouched — except hogs, which
-// advance while they remain over the ceiling: a paused process frees almost
-// nothing, so holding it forever protects nothing.
+// Between warn and resume they stay paused, untouched — a frozen process
+// frees almost nothing, so nothing dies while pressure is clean.
 func (g *Guard) escalate(now time.Time, procs []proc.Proc, low, growing bool) {
-	overCap := g.stillOverCap(procs)
+	byPID := make(map[int32]proc.Proc, len(procs))
+	for _, p := range procs {
+		byPID[p.PID] = p
+	}
 	for pid, h := range g.held {
-		if h.hog {
-			if !overCap[pid] {
-				continue
-			}
-		} else if !low && !growing {
+		if !low && !growing {
 			continue
 		}
 		if now.Sub(h.stoppedAt) < g.cfg.TermAfter {
 			continue
 		}
 		reason := "pressure stayed below warn"
-		switch {
-		case h.hog:
-			reason = "stayed over the process ceiling"
-		case !low:
+		if !low {
 			reason = "swap kept growing"
 		}
 		if h.termAt.IsZero() {
@@ -413,7 +409,9 @@ func (g *Guard) escalate(now time.Time, procs []proc.Proc, low, growing bool) {
 			})
 			g.alert("sys-guardian", fmt.Sprintf("killed %s (%s) — %s", h.name, gib(h.rss), detail))
 			for _, tpid := range h.tree {
-				g.killed[tpid] = now
+				if p, ok := byPID[tpid]; ok {
+					g.killed[keyOf(p)] = now
+				}
 			}
 			delete(g.held, pid)
 		}
@@ -421,8 +419,14 @@ func (g *Guard) escalate(now time.Time, procs []proc.Proc, low, growing bool) {
 	g.savePaused()
 }
 
+// keyOf identifies a victim across respawns: a re-launched process has a new
+// PID but the same name and command line, so the kill cooldown still applies.
+func keyOf(p proc.Proc) string {
+	return p.Name + "\x00" + p.Cmdline
+}
+
 // stillOverCap returns held hogs whose RSS still exceeds the ceiling; they
-// stay paused through recovery and keep escalating.
+// stay paused through recovery rather than re-admitted while still huge.
 func (g *Guard) stillOverCap(procs []proc.Proc) map[int32]bool {
 	if len(g.held) == 0 || g.cfg.HogBytes == 0 {
 		return nil
@@ -649,7 +653,7 @@ func (g *Guard) pickVictim(st mem.Status, procs []proc.Proc) (*scored, []journal
 	cands := make([]scored, 0, len(procs))
 	now := g.now()
 	for _, p := range procs {
-		if heldSet[p.PID] || g.blocked[p.PID] || !g.killed[p.PID].IsZero() ||
+		if heldSet[p.PID] || g.blocked[p.PID] || !g.killed[keyOf(p)].IsZero() ||
 			p.RSS < g.cfg.MemFloorBytes {
 			continue
 		}
@@ -680,7 +684,7 @@ func (g *Guard) pickDisposable(procs []proc.Proc, now time.Time,
 	heldSet := g.heldPIDs()
 	cands := make([]scored, 0, len(procs))
 	for _, p := range procs {
-		if heldSet[p.PID] || g.blocked[p.PID] || !g.killed[p.PID].IsZero() ||
+		if heldSet[p.PID] || g.blocked[p.PID] || !g.killed[keyOf(p)].IsZero() ||
 			p.RSS < g.cfg.MemFloorBytes || !eligible(p) {
 			continue
 		}
@@ -711,7 +715,7 @@ func (g *Guard) pickByCPU(procs []proc.Proc, now time.Time) (*scored, []journal.
 	heldSet := g.heldPIDs()
 	cands := make([]scored, 0, len(procs))
 	for _, p := range procs {
-		if heldSet[p.PID] || g.blocked[p.PID] || !g.killed[p.PID].IsZero() {
+		if heldSet[p.PID] || g.blocked[p.PID] || !g.killed[keyOf(p)].IsZero() {
 			continue
 		}
 		if tier := g.scorer.TierOf(p); tier != score.TierDisposable && tier != score.TierNeutral {

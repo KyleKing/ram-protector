@@ -40,8 +40,10 @@
 - **Pause first, kill as fallback.** SIGSTOP is reversible and stops growth +
   CPU burn immediately, but frees almost nothing (~0.03 GiB reclaimable vs
   ~0.6 GiB for kill) — so it is the first rung, never the last. Escalation
-  runs only while pressure stays below `warn_level`; between warn and resume
-  the victim stays paused indefinitely.
+  runs only while pressure persists (below `warn_level`, or swap still growing
+  inside a spike window); between warn and resume the victim stays paused
+  indefinitely. A killed victim's name + cmdline enters a cooldown keyed by
+  identity, not PID, so a supervisor respawn is not churn-killed.
 - **Kill the tree, not the pid.** Children reparent to launchd and survive a
   lone-parent kill; the guard SIGSTOPs the whole tree first, then signals
   deepest-first.
@@ -70,8 +72,9 @@
   reaped by launchd — memory signals alone could not see it.
 - **Hog ceiling for slow leaks.** A leak creeping a few MB per minute trips
   neither signal, so a disposable process over `hog_mb` is stopped even when
-  the system is healthy. Because a paused process frees almost nothing, hogs
-  keep escalating while over the cap instead of holding RAM frozen forever.
+  the system is healthy. A paused process frees almost nothing, but freezing
+  already stops the growth — so hogs stay frozen while over the cap and
+  escalate only under real pressure, like every held victim.
 - **Observe is the default mode.** The same code path logs every decision it
   *would* take; no signal is ever sent. Data collected there tunes the tiers
   and thresholds before `protect` is enabled.

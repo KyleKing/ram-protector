@@ -402,25 +402,33 @@ func TestHog_PausesDisposableOverCeilingWhileHealthy(t *testing.T) {
 	}
 }
 
-func TestHog_EscalatesWhileOverCap(t *testing.T) {
+func TestHog_FrozenWhileHealthy_EscalatesUnderPressure(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, hogProcs(), 70)
 	h.guard.Tick()
-	*h.now = h.now.Add(2 * time.Minute)
+	*h.now = h.now.Add(2 * time.Minute) // past TermAfter with no pressure
+	h.guard.Tick()
+	if hasCall(h.sys.calls, syscall.SIGTERM, 200) {
+		t.Fatalf("hog escalated while the system was healthy: %+v", h.sys.calls)
+	}
+	h.sys.level = 15 // real pressure arrives: the frozen hog dies first
 	h.guard.Tick()
 	if !hasCall(h.sys.calls, syscall.SIGTERM, 200) {
-		t.Fatalf("over-cap hog never termed: %+v", h.sys.calls)
+		t.Fatalf("hog not termed under pressure: %+v", h.sys.calls)
 	}
 	*h.now = h.now.Add(20 * time.Second)
 	h.guard.Tick()
 	if !hasCall(h.sys.calls, syscall.SIGKILL, 200) {
-		t.Fatalf("over-cap hog never killed: %+v", h.sys.calls)
+		t.Fatalf("hog not killed under pressure: %+v", h.sys.calls)
 	}
 }
 
 func TestKilled_NotRepickedImmediately(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t, hogProcs(), 70)
+	procs := []proc.Proc{
+		{PID: 200, PPID: 1, Name: "node", Cmdline: "node tsc --watch", RSS: 7 * gib, Created: time.Now()},
+	}
+	h := newHarness(t, procs, 15)
 	h.guard.Tick()
 	*h.now = h.now.Add(2 * time.Minute)
 	h.guard.Tick()
@@ -428,7 +436,19 @@ func TestKilled_NotRepickedImmediately(t *testing.T) {
 	h.guard.Tick()
 	h.guard.Tick() // the corpse still lists in procs; it must not be re-stopped
 	if got := countSig(h.sys.calls, syscall.SIGSTOP); got != 1 {
-		t.Errorf("SIGSTOP sent %d times, killed pid was re-picked: %+v", got, h.sys.calls)
+		t.Fatalf("SIGSTOP sent %d times, killed pid was re-picked: %+v", got, h.sys.calls)
+	}
+	// A respawn has a new PID but the same name and command line: the
+	// identity cooldown still blocks it.
+	h.sys.procs[0].PID = 900
+	h.guard.Tick()
+	if got := countSig(h.sys.calls, syscall.SIGSTOP); got != 1 {
+		t.Fatalf("respawned victim re-picked inside the cooldown: %+v", h.sys.calls)
+	}
+	*h.now = h.now.Add(6 * time.Minute) // past the kill cooldown
+	h.guard.Tick()
+	if !hasCall(h.sys.calls, syscall.SIGSTOP, 900) {
+		t.Errorf("victim not re-picked after the cooldown lapsed: %+v", h.sys.calls)
 	}
 }
 
