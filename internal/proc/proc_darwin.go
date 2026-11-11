@@ -47,7 +47,7 @@ type procTaskInfo struct {
 
 type timebaseInfo struct {
 	number uint32
-	denom uint32
+	denom  uint32
 }
 
 var (

@@ -74,9 +74,9 @@ var (
 
 // Default threshold and timing values, documented in README.
 const (
-	defaultWarnLevel     = 20
-	defaultCriticalLevel = 8
-	defaultResumeLevel   = 30
+	defaultWarnLevel     = 45
+	defaultCriticalLevel = 30
+	defaultResumeLevel   = 55
 	defaultResumeTicks   = 2
 	defaultMemFloorMB    = 512
 	defaultSwapSpikeMB   = 1024

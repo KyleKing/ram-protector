@@ -30,7 +30,7 @@ func TestLoad_Overlay(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "config.toml")
 	raw := []byte(`mode = "protect"
-warn_level = 25
+warn_level = 50
 poll_healthy = "10s"
 extra_disposable = ["my-helper"]
 `)
@@ -41,7 +41,7 @@ extra_disposable = ["my-helper"]
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if cfg.Mode != config.ModeProtect || cfg.WarnLevel != 25 ||
+	if cfg.Mode != config.ModeProtect || cfg.WarnLevel != 50 ||
 		cfg.PollHealthy.Seconds() != 10 || len(cfg.Disposable) != 1 {
 		t.Errorf("overlay not applied: %+v", cfg)
 	}

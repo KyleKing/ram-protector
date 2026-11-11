@@ -59,9 +59,9 @@ then flip to `protect`:
 mode = "protect"
 
 # All optional — defaults shown:
-# warn_level = 20        # act below this % memory available
-# critical_level = 8     # last-resort tier eligible below this
-# resume_level = 30      # SIGCONT held processes above this
+# warn_level = 45        # act below this % memory available
+# critical_level = 30    # last-resort tier eligible below this
+# resume_level = 55      # SIGCONT held processes above this
 # term_after = "45s"     # paused this long under pressure → SIGTERM
 # kill_after = "10s"     # SIGTERM → SIGKILL grace
 # mem_floor_mb = 512     # ignore smaller processes
@@ -72,6 +72,9 @@ mode = "protect"
 # min_pause = "2m"       # a stopped victim is never resumed sooner than this
 # cpu_burn_pct = 150     # disposable process over this %CPU sustained for...
 # cpu_burn_for = "2m"    #   ...this long is paused even when memory is healthy
+# load_per_core = 1.5    # load1/core above this for load_for is a CPU storm
+# load_for = "90s"       #   sustained this long before pausing top CPU consumers
+# load_resume_per_core = 0.8  # storm clears below this; held processes resume
 # extra_disposable = ["my-tool"]
 # extra_never = ["do-not-touch"]   # extra_* lists override built-ins by tier
 ```
