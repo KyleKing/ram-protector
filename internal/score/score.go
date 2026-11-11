@@ -135,6 +135,9 @@ func (s *Scorer) TierOf(p proc.Proc) Tier {
 	if matches(s.never, text) {
 		return TierNever
 	}
+	if isAppBundle(p) {
+		return TierLastResort
+	}
 	if matches(s.disposable, text) {
 		return TierDisposable
 	}
@@ -143,6 +146,12 @@ func (s *Scorer) TierOf(p proc.Proc) Tier {
 	}
 
 	return TierNeutral
+}
+
+// A paused app-bundle process dies to its parent's watchdog or beachballs the
+// GUI, so a stop is a kill — app processes are only victims at critical.
+func isAppBundle(p proc.Proc) bool {
+	return strings.Contains(p.Cmdline, ".app/")
 }
 
 func isPlatform(p proc.Proc) bool {

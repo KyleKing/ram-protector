@@ -52,6 +52,14 @@ func TestTierOf(t *testing.T) {
 			want: score.TierNever, name: "virtual machine",
 		},
 		{name: "homebrew sbin", proc: mkProc(12, "mtr", "/opt/homebrew/sbin/mtr"), want: score.TierNeutral},
+		{
+			proc: mkProc(13, "DaisyDisk", "/Applications/DaisyDisk.app/Contents/MacOS/DaisyDisk"),
+			want: score.TierLastResort, name: "app gui",
+		},
+		{
+			proc: mkProc(14, "Acme Helper", "/x/Acme.app/Contents/MacOS/Acme Helper --type=renderer"),
+			want: score.TierLastResort, name: "app helper",
+		},
 	}
 	sc := score.New(nil, nil, nil)
 	for _, tt := range tests {
