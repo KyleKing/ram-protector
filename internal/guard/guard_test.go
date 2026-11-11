@@ -316,8 +316,8 @@ func loadHarness(t *testing.T) *harness {
 
 // feedCPU advances the clock and credits each process with cpu seconds so the
 // scorer sees differential burn between ticks.
-func feedCPU(h *harness, dt time.Duration, cpuByPID map[int32]float64) {
-	*h.now = h.now.Add(dt)
+func feedCPU(h *harness, cpuByPID map[int32]float64) {
+	*h.now = h.now.Add(30 * time.Second)
 	for i := range h.sys.procs {
 		h.sys.procs[i].CPUTotal += cpuByPID[h.sys.procs[i].PID]
 	}
@@ -328,12 +328,12 @@ func TestLoad_PausesTopCPUConsumerAfterSustained(t *testing.T) {
 	h := loadHarness(t)
 	h.sys.load1 = 30 // 3.0 per core, over the 1.5 trigger
 	h.guard.Tick()   // establishes the previous CPU sample
-	feedCPU(h, 30*time.Second, map[int32]float64{400: 60, 401: 9, 70: 90})
+	feedCPU(h, map[int32]float64{400: 60, 401: 9, 70: 90})
 	h.guard.Tick() // 30s sustained: under LoadFor
 	if len(h.sys.calls) != 0 {
 		t.Fatalf("stopped during the burn-in window: %+v", h.sys.calls)
 	}
-	feedCPU(h, 30*time.Second, map[int32]float64{400: 60, 401: 9, 70: 90})
+	feedCPU(h, map[int32]float64{400: 60, 401: 9, 70: 90})
 	h.guard.Tick() // 60s sustained: storm is active
 	if !hasCall(h.sys.calls, syscall.SIGSTOP, 400) {
 		t.Errorf("top CPU consumer not stopped under load: %+v", h.sys.calls)
@@ -348,9 +348,9 @@ func TestLoad_ResumesWhenLoadClears(t *testing.T) {
 	h := loadHarness(t)
 	h.sys.load1 = 30
 	h.guard.Tick()
-	feedCPU(h, 30*time.Second, map[int32]float64{400: 60, 70: 90})
+	feedCPU(h, map[int32]float64{400: 60, 70: 90})
 	h.guard.Tick()
-	feedCPU(h, 30*time.Second, map[int32]float64{400: 60, 70: 90})
+	feedCPU(h, map[int32]float64{400: 60, 70: 90})
 	h.guard.Tick()
 	if !hasCall(h.sys.calls, syscall.SIGSTOP, 400) {
 		t.Fatalf("load storm paused no victim: %+v", h.sys.calls)
@@ -368,13 +368,13 @@ func TestLoad_BurstDoesNotTrigger(t *testing.T) {
 	h := loadHarness(t)
 	h.guard.Tick()
 	h.sys.load1 = 30
-	feedCPU(h, 30*time.Second, map[int32]float64{400: 60})
+	feedCPU(h, map[int32]float64{400: 60})
 	h.guard.Tick()
 	h.sys.load1 = 10 // dips below trigger: the sustained timer must reset
-	feedCPU(h, 30*time.Second, map[int32]float64{400: 60})
+	feedCPU(h, map[int32]float64{400: 60})
 	h.guard.Tick()
 	h.sys.load1 = 30
-	feedCPU(h, 30*time.Second, map[int32]float64{400: 60})
+	feedCPU(h, map[int32]float64{400: 60})
 	h.guard.Tick()
 	if hasCall(h.sys.calls, syscall.SIGSTOP, 400) {
 		t.Error("stopped on a load burst; the dip should have reset the timer")

@@ -273,6 +273,10 @@ func (g *Guard) swapSignals(swapDelta uint64, now time.Time) (bool, bool) {
 // process contributes too little to a storm to be worth freezing.
 const minVictimCPU = 10.0
 
+// resumeRatio places the default load-resume threshold at half the trigger,
+// leaving a hysteresis band between storming and calm.
+const resumeRatio = 0.5
+
 // trackLoad maintains the storm flag: load1 per core sustained over
 // LoadPerCore for LoadFor activates it, and it stays active until the load
 // falls under LoadResumePerCore. The band between them is hysteresis.
@@ -282,7 +286,7 @@ func (g *Guard) trackLoad(st mem.Status, now time.Time) {
 	}
 	resume := g.cfg.LoadResumePerCore
 	if resume <= 0 {
-		resume = g.cfg.LoadPerCore / 2
+		resume = g.cfg.LoadPerCore * resumeRatio
 	}
 	switch perCore := st.Load1 / float64(g.cores()); {
 	case perCore >= g.cfg.LoadPerCore:

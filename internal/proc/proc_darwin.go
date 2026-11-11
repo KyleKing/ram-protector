@@ -50,19 +50,28 @@ type timebaseInfo struct {
 	denom  uint32
 }
 
+// proc_pidinfo writes proc_taskinfo by struct size; a drifted field shifts
+// every field after it.
+const taskInfoSize = 96
+
+var (
+	_ [taskInfoSize - unsafe.Sizeof(procTaskInfo{})]byte
+	_ [unsafe.Sizeof(procTaskInfo{}) - taskInfoSize]byte
+)
+
 var (
 	procPidInfo      func(pid, flavor int32, arg uint64, buf unsafe.Pointer, size int32) int32
 	machTimebaseInfo func(info *timebaseInfo) int32
 	timescale        float64
 	bindOnce         sync.Once
-	bindErr          error
+	errBind          error
 )
 
 func bind() error {
 	bindOnce.Do(func() {
 		h, err := purego.Dlopen(libSystemPath, purego.RTLD_LAZY|purego.RTLD_GLOBAL)
 		if err != nil {
-			bindErr = fmt.Errorf("dlopen libSystem: %w", err)
+			errBind = fmt.Errorf("dlopen libSystem: %w", err)
 
 			return
 		}
@@ -73,7 +82,7 @@ func bind() error {
 		timescale = float64(tb.number) / float64(tb.denom) / nsecPerSec
 	})
 
-	return bindErr
+	return errBind
 }
 
 // List snapshots all visible processes. Each process costs one proc_pidinfo
@@ -105,7 +114,9 @@ func read(k *unix.KinfoProc) (Proc, bool) {
 		return Proc{}, false
 	}
 	var ti procTaskInfo
-	if ret := procPidInfo(pid, procPIDTaskInfo, 0, unsafe.Pointer(&ti), int32(unsafe.Sizeof(ti))); ret <= 0 {
+	//nolint:gosec // G103: proc_pidinfo writes into ti by address, its ABI
+	ret := procPidInfo(pid, procPIDTaskInfo, 0, unsafe.Pointer(&ti), int32(unsafe.Sizeof(ti)))
+	if ret <= 0 {
 		return Proc{}, false
 	}
 
@@ -129,7 +140,7 @@ func read(k *unix.KinfoProc) (Proc, bool) {
 		RSS:      ti.ResidentSize,
 		CPUTotal: float64(ti.TotalUser+ti.TotalSystem) * timescale,
 		Created: time.Unix(k.Proc.P_starttime.Sec,
-			int64(k.Proc.P_starttime.Usec)*1000),
+			int64(k.Proc.P_starttime.Usec)*int64(time.Microsecond)),
 	}, true
 }
 
@@ -144,7 +155,8 @@ func argsOf(pid int32) []string {
 	nargs := int(binary.LittleEndian.Uint32(raw[:4]))
 	chunks := bytes.Split(raw[4:], []byte{0})
 	i := 1
-	for ; i < len(chunks) && len(chunks[i]) == 0; i++ {
+	for i < len(chunks) && len(chunks[i]) == 0 {
+		i++
 	}
 	if nargs > len(chunks)-i {
 		nargs = len(chunks) - i

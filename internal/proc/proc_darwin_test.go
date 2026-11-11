@@ -1,38 +1,34 @@
 //go:build darwin
 
-package proc
+package proc_test
 
 import (
 	"os"
 	"runtime"
 	"testing"
-	"unsafe"
+
+	"github.com/kyleking/sys-guardian/internal/proc"
 )
 
-func TestTaskInfoLayout(t *testing.T) {
-	// proc_pidinfo fills proc_taskinfo by size; a drifted field offsets
-	// everything after it.
-	if got, want := unsafe.Sizeof(procTaskInfo{}), uintptr(96); got != want {
-		t.Fatalf("procTaskInfo size = %d, want %d (XNU struct proc_taskinfo)", got, want)
-	}
-}
-
 func TestList_FindsSelf(t *testing.T) {
-	procs, err := List()
+	t.Parallel()
+	procs, err := proc.List()
 	if err != nil {
 		t.Fatal(err)
 	}
-	self := int32(os.Getpid())
+	self := int32(os.Getpid()) //nolint:gosec // G115: pids fit int32
 	for _, p := range procs {
 		if p.PID != self {
 			continue
 		}
-		if p.RSS == 0 || p.PPID != int32(os.Getppid()) || p.Name == "" {
+		ppid := int32(os.Getppid()) //nolint:gosec // G115: pids fit int32
+		if p.RSS == 0 || p.PPID != ppid || p.Name == "" {
 			t.Errorf("suspicious self snapshot: %+v", p)
 		}
 		if p.Created.IsZero() {
 			t.Error("zero start time")
 		}
+
 		return
 	}
 	t.Errorf("self pid %d not listed among %d procs on %s", self, len(procs), runtime.GOOS)
