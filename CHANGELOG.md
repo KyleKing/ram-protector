@@ -1,3 +1,19 @@
+## v1.1.0 (2026-11-11)
+
+### Feat
+
+- **guard**: pause top CPU consumers under sustained system load
+- **journal**: record load averages and top CPU consumers in snapshots
+
+### Fix
+
+- **service**: run the agent as Interactive so launchd sheds it last
+- **guard**: tick on startup instead of after the first poll interval
+
+### Perf
+
+- **proc**: enumerate via kern.proc.all plus one proc_pidinfo per process
+
 ## v1.0.1 (2026-11-10)
 
 ### Fix
