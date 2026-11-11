@@ -14,7 +14,9 @@
 - `internal/score` — victim ranking: RSS_GiB × tier × age × growth × cpu, with a
   human-readable reason per factor for the journal. Tiers: `never` >
   `disposable` > `last_resort` > `neutral`, matched as substrings over name +
-  cmdline. Only the previous snapshot per PID is kept.
+  cmdline; Apple platform binaries (argv[0] under `/System`, `/usr/libexec`,
+  `/usr/sbin`, `/sbin`) land in `last_resort`. Only the previous snapshot per
+  PID is kept.
 - `internal/guard` — the state machine. One victim per tick:
   SIGSTOP the tree (parent first, so it can't re-fork) → TERM deepest-first
   after `term_after` if pressure persists → SIGKILL after `kill_after`.

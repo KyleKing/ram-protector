@@ -39,6 +39,19 @@ func TestTierOf(t *testing.T) {
 		{name: "windowserver", proc: mkProc(6, "WindowServer", "/x/WindowServer -daemon"), want: score.TierNever},
 		{name: "self", proc: mkProc(7, "sys-guardian", "sys-guardian daemon"), want: score.TierNever},
 		{name: "mystery", proc: mkProc(8, "mystery", "mystery --flag"), want: score.TierNeutral},
+		{
+			proc: mkProc(9, "mediaanalysisd", "/usr/libexec/mediaanalysisd"),
+			want: score.TierLastResort, name: "platform daemon",
+		},
+		{
+			proc: mkProc(10, "helpd", "/System/Library/x.framework/helpd"),
+			want: score.TierLastResort, name: "system framework",
+		},
+		{
+			proc: mkProc(11, "com.apple.Virtualization.VirtualMachine", "com.apple.Virtualization.VirtualMachine"),
+			want: score.TierLastResort, name: "virtual machine",
+		},
+		{name: "homebrew sbin", proc: mkProc(12, "mtr", "/opt/homebrew/sbin/mtr"), want: score.TierNeutral},
 	}
 	sc := score.New(nil, nil, nil)
 	for _, tt := range tests {

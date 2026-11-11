@@ -78,8 +78,17 @@ var (
 		"nvim", "vim", "google chrome", "safari", "firefox", "arc",
 		"brave", "edge", "finder", "dock", "systemuiserver", "controlcenter",
 		"slack", "discord", "zoom", "spotify", "signal", "messages", "mail",
+		"com.apple.virtualization",
 	}
 )
+
+// platformPrefixes mark Apple platform binaries (by argv[0] path) as
+// last-resort: pausing a system daemon buys little, but at critical pressure
+// nothing is off-limits. Prefixes, not substrings, so user paths such as
+// /opt/homebrew/sbin stay neutral.
+var platformPrefixes = []string{
+	"/System/", "/usr/libexec/", "/usr/sbin/", "/sbin/",
+}
 
 type sample struct {
 	at  time.Time
@@ -127,11 +136,21 @@ func (s *Scorer) TierOf(p proc.Proc) Tier {
 	if matches(s.disposable, text) {
 		return TierDisposable
 	}
-	if matches(s.lastResort, text) {
+	if matches(s.lastResort, text) || isPlatform(p) {
 		return TierLastResort
 	}
 
 	return TierNeutral
+}
+
+func isPlatform(p proc.Proc) bool {
+	for _, prefix := range platformPrefixes {
+		if strings.HasPrefix(p.Cmdline, prefix) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Observe records this snapshot for growth and CPU deltas, pruning stale PIDs.
