@@ -279,6 +279,10 @@ const minStormCPU = 100.0
 // share of the burn — the spawn point, not the shell above it.
 const descendShare = 0.5
 
+// maxStormHeld bounds the trees frozen by the load trigger: pauses land one
+// per tick, and past this many frozen trees more stops relieve nothing.
+const maxStormHeld = 8
+
 // resumeRatio places the default load-resume threshold at half the trigger,
 // leaving a hysteresis band between storming and calm.
 const resumeRatio = 0.5
@@ -543,7 +547,7 @@ func (g *Guard) maybePauseBurn(st mem.Status, procs []proc.Proc, now time.Time) 
 // under real memory pressure like any other held process.
 // Reports whether a victim was paused.
 func (g *Guard) maybePauseLoad(st mem.Status, procs []proc.Proc, now time.Time) bool {
-	if !g.loadActive {
+	if !g.loadActive || len(g.held) >= maxStormHeld {
 		return false
 	}
 	victim, top := g.pickByCPU(procs, now)
@@ -567,8 +571,10 @@ func (g *Guard) maybePauseLoad(st mem.Status, procs []proc.Proc, now time.Time) 
 	return true
 }
 
-// pauseTree holds the victim, SIGSTOPs its tree, notifies, and persists.
-// A victim whose stop failed is dropped rather than tracked as held.
+// pauseTree holds the victim, SIGSTOPs its tree, and persists; only the
+// first pause of a quiet period notifies — a storm drains on the journal,
+// not as stacked banners. A failed stop drops the victim rather than
+// tracking it as held.
 func (g *Guard) pauseTree(victim *scored, procs []proc.Proc, now time.Time,
 	hog bool, sub, body string,
 ) {
@@ -583,7 +589,9 @@ func (g *Guard) pauseTree(victim *scored, procs []proc.Proc, now time.Time,
 		delete(g.held, victim.p.PID)
 		return
 	}
-	g.notify("sys-guardian", sub, body)
+	if len(g.held) == 1 {
+		g.notify("sys-guardian", sub, body)
+	}
 	g.savePaused()
 }
 

@@ -70,6 +70,7 @@ type harness struct {
 	sys   *fakeSys
 	guard *guard.Guard
 	now   *time.Time
+	notes int
 }
 
 func newHarness(t *testing.T, procs []proc.Proc, level int) *harness {
@@ -106,10 +107,12 @@ func newHarnessCfg(t *testing.T, procs []proc.Proc, level int, tweak func(*guard
 	if tweak != nil {
 		tweak(&cfg)
 	}
-	g := guard.New(cfg, fs, score.New(nil, nil, nil), jw, nil, nil,
+	h := &harness{sys: fs, now: &now}
+	h.guard = guard.New(cfg, fs, score.New(nil, nil, nil), jw,
+		func(string, string, string) { h.notes++ }, nil,
 		guard.WithNow(func() time.Time { return now }))
 
-	return &harness{sys: fs, guard: g, now: &now}
+	return h
 }
 
 func tscTree() []proc.Proc {
@@ -398,6 +401,75 @@ func TestLoad_PausesStormSpawnPoint(t *testing.T) {
 	}
 	if hasCall(h.sys.calls, syscall.SIGSTOP, 500) {
 		t.Error("bystander under the storm floor was stopped")
+	}
+}
+
+func TestLoad_IneligibleParentIsBoundary(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	h := newHarnessCfg(t, []proc.Proc{
+		{PID: 90, PPID: 1, Name: "zsh", Cmdline: "zsh", RSS: 50 << 20, Created: now},
+		{
+			PID: 300, PPID: 90, Name: "python3.12",
+			Cmdline: "python /private/tmp/claude-501/x/measure.py", RSS: 200 << 20, Created: now,
+		},
+		{PID: 400, PPID: 300, Name: "python3.12", Cmdline: "python -c worker", RSS: 150 << 20, Created: now},
+		{PID: 401, PPID: 400, Name: "git", Cmdline: "git grep x", RSS: 100 << 20, Created: now},
+	}, 70, func(c *guard.Config) {
+		c.LoadPerCore = 1.5
+		c.LoadResumePerCore = 0.8
+		c.LoadFor = time.Minute
+		c.NumCores = 10
+	})
+	h.sys.load1 = 30
+	h.guard.Tick()
+	feed := func() {
+		feedCPU(h, map[int32]float64{400: 6, 401: 60})
+		h.guard.Tick()
+	}
+	feed()
+	feed()
+	if !hasCall(h.sys.calls, syscall.SIGSTOP, 401) {
+		t.Fatalf("eligible worker under the boundary not stopped: %+v", h.sys.calls)
+	}
+	for _, pid := range []int32{90, 300} {
+		if hasCall(h.sys.calls, syscall.SIGSTOP, pid) {
+			t.Errorf("protected process %d was stopped", pid)
+		}
+	}
+}
+
+func TestLoad_HoldsCapped(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	procs := make([]proc.Proc, 0, 10)
+	for i := range 10 {
+		procs = append(procs, proc.Proc{
+			PID: int32(1000 + i), PPID: 1,
+			Name: "worker", Cmdline: "worker", RSS: 100 << 20, Created: now,
+		})
+	}
+	h := newHarnessCfg(t, procs, 70, func(c *guard.Config) {
+		c.LoadPerCore = 1.5
+		c.LoadResumePerCore = 0.8
+		c.LoadFor = time.Minute
+		c.NumCores = 10
+	})
+	h.sys.load1 = 30
+	h.guard.Tick()
+	for range 10 {
+		cpu := map[int32]float64{}
+		for _, p := range h.sys.procs {
+			cpu[p.PID] = 60
+		}
+		feedCPU(h, cpu)
+		h.guard.Tick()
+	}
+	if got := len(h.guard.Held()); got != 8 {
+		t.Errorf("held %d storm victims, want the 8-tree cap", got)
+	}
+	if h.notes != 1 {
+		t.Errorf("%d pause notifications, want 1 for the first of a burst", h.notes)
 	}
 }
 
