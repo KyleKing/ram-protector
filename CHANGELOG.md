@@ -1,3 +1,15 @@
+## v1.4.0 (2026-11-12)
+
+### Feat
+
+- structure pause notifications as headline, evidence, outcome
+
+### Fix
+
+- cap storm holds and quiet repeat pause notifications
+- drop tree phrasing from load notifications for single-process victims
+- pause load storms at the spawner, not worker-by-worker
+
 ## v1.3.0 (2026-11-11)
 
 ### Feat
