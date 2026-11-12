@@ -557,8 +557,11 @@ func (g *Guard) maybePauseLoad(st mem.Status, procs []proc.Proc, now time.Time) 
 		Msg: fmt.Sprintf("trigger=system_load cpu=%d%%", int(victim.score)),
 	})
 	sub := fmt.Sprintf("paused %s — load storm", victim.p.Name)
-	body := fmt.Sprintf("tree burning ~%.0f%% CPU across %d procs\nresumes when the storm clears",
-		victim.score, len(treeOf(victim.p.PID, procs)))
+	evidence := fmt.Sprintf("burning ~%.0f%% CPU", victim.score)
+	if n := len(treeOf(victim.p.PID, procs)); n > 1 {
+		evidence = fmt.Sprintf("tree burning ~%.0f%% CPU across %d procs", victim.score, n)
+	}
+	body := evidence + "\nresumes when the storm clears"
 	g.pauseTree(victim, procs, now, false, sub, body)
 
 	return true
