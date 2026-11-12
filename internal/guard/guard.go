@@ -128,7 +128,7 @@ type Guard struct {
 	sys        Sys
 	scorer     *score.Scorer
 	journal    *journal.Writer
-	notify     func(title, body string)
+	notify     func(title, sub, body string)
 	alert      func(title, body string)
 	held       map[int32]*held
 	blocked    map[int32]bool
@@ -145,14 +145,15 @@ type Guard struct {
 
 // New builds a guard and, in protect mode, re-adopts processes a previous run
 // paused but never resumed.
-func New(cfg Config, sys Sys, sc *score.Scorer, jw *journal.Writer, notify, alert func(title, body string),
+func New(cfg Config, sys Sys, sc *score.Scorer, jw *journal.Writer,
+	notify func(title, sub, body string), alert func(title, body string),
 	opts ...Option,
 ) *Guard {
 	if notify == nil {
-		notify = func(string, string) {}
+		notify = func(string, string, string) {}
 	}
 	if alert == nil {
-		alert = notify
+		alert = func(title, body string) { notify(title, "", body) }
 	}
 	g := &Guard{
 		cfg:       cfg,
@@ -411,7 +412,8 @@ func (g *Guard) escalate(now time.Time, procs []proc.Proc, low, growing bool) {
 				Time: now, Kind: kindAction, Action: "kill",
 				PID: pid, Name: h.name, RSS: h.rss, Msg: detail,
 			})
-			g.alert("sys-guardian", fmt.Sprintf("killed %s (%s) — %s", h.name, gib(h.rss), detail))
+			g.alert("sys-guardian", fmt.Sprintf("killed %s (%s)\n%s",
+				h.name, gib(h.rss), strings.ReplaceAll(detail, "; ", "\n")))
 			for _, tpid := range h.tree {
 				if p, ok := byPID[tpid]; ok {
 					g.killed[keyOf(p)] = now
@@ -477,9 +479,10 @@ func (g *Guard) maybePause(st mem.Status, procs []proc.Proc, now time.Time, spik
 	if victim == nil {
 		return
 	}
-	msg := fmt.Sprintf("paused %s (%s), %d%% memory free. Will resume when clear.",
-		victim.p.Name, gib(victim.p.RSS), st.Level)
-	g.pauseTree(victim, procs, now, false, msg)
+	sub := fmt.Sprintf("paused %s — memory pressure", victim.p.Name)
+	body := fmt.Sprintf("RSS %s · %d%% free\nresumes when clear",
+		gib(victim.p.RSS), st.Level)
+	g.pauseTree(victim, procs, now, false, sub, body)
 }
 
 // maybePauseHog freezes a disposable process over the RSS ceiling while the
@@ -500,9 +503,9 @@ func (g *Guard) maybePauseHog(st mem.Status, procs []proc.Proc, now time.Time) b
 		Action: verb, PID: victim.p.PID, Name: victim.p.Name, RSS: victim.p.RSS,
 		Msg: "trigger=hog_ceiling",
 	})
-	msg := fmt.Sprintf("paused %s (%s) — over the process ceiling.",
-		victim.p.Name, gib(victim.p.RSS))
-	g.pauseTree(victim, procs, now, true, msg)
+	sub := fmt.Sprintf("paused %s — over the process ceiling", victim.p.Name)
+	body := fmt.Sprintf("RSS %s\nheld until back under the ceiling", gib(victim.p.RSS))
+	g.pauseTree(victim, procs, now, true, sub, body)
 
 	return true
 }
@@ -528,9 +531,9 @@ func (g *Guard) maybePauseBurn(st mem.Status, procs []proc.Proc, now time.Time) 
 		Action: verb, PID: victim.p.PID, Name: victim.p.Name, RSS: victim.p.RSS,
 		Msg: fmt.Sprintf("trigger=cpu_burn cpu=%d%%", int(cpu)),
 	})
-	msg := fmt.Sprintf("paused %s — burning %.0f%% CPU for %s.",
-		victim.p.Name, cpu, g.cfg.CPUBurnFor)
-	g.pauseTree(victim, procs, now, false, msg)
+	sub := fmt.Sprintf("paused %s — sustained CPU burn", victim.p.Name)
+	body := fmt.Sprintf("~%.0f%% CPU for %s\nresumes when clear", cpu, g.cfg.CPUBurnFor)
+	g.pauseTree(victim, procs, now, false, sub, body)
 
 	return true
 }
@@ -553,16 +556,19 @@ func (g *Guard) maybePauseLoad(st mem.Status, procs []proc.Proc, now time.Time) 
 		Action: verb, PID: victim.p.PID, Name: victim.p.Name, RSS: victim.p.RSS,
 		Msg: fmt.Sprintf("trigger=system_load cpu=%d%%", int(victim.score)),
 	})
-	msg := fmt.Sprintf("paused %s — load storm, its tree burning %.0f%% CPU.",
-		victim.p.Name, victim.score)
-	g.pauseTree(victim, procs, now, false, msg)
+	sub := fmt.Sprintf("paused %s — load storm", victim.p.Name)
+	body := fmt.Sprintf("tree burning ~%.0f%% CPU across %d procs\nresumes when the storm clears",
+		victim.score, len(treeOf(victim.p.PID, procs)))
+	g.pauseTree(victim, procs, now, false, sub, body)
 
 	return true
 }
 
 // pauseTree holds the victim, SIGSTOPs its tree, notifies, and persists.
 // A victim whose stop failed is dropped rather than tracked as held.
-func (g *Guard) pauseTree(victim *scored, procs []proc.Proc, now time.Time, hog bool, msg string) {
+func (g *Guard) pauseTree(victim *scored, procs []proc.Proc, now time.Time,
+	hog bool, sub, body string,
+) {
 	h := &held{
 		name: victim.p.Name, rss: victim.p.RSS, created: victim.p.Created,
 		parent: parentName(victim.p.PPID, procs), cmdline: victim.p.Cmdline,
@@ -574,7 +580,7 @@ func (g *Guard) pauseTree(victim *scored, procs []proc.Proc, now time.Time, hog 
 		delete(g.held, victim.p.PID)
 		return
 	}
-	g.notify("sys-guardian", msg)
+	g.notify("sys-guardian", sub, body)
 	g.savePaused()
 }
 
@@ -873,7 +879,7 @@ func (g *Guard) resumeAll(keep map[int32]bool) {
 	}
 	g.healthy = 0
 	g.journal.Log(journal.Event{Time: g.now(), Kind: "resume", Msg: strings.Join(names, ", ")})
-	g.notify("sys-guardian", "resumed "+strings.Join(names, ", "))
+	g.notify("sys-guardian", fmt.Sprintf("resumed %d", len(names)), strings.Join(names, ", "))
 	g.savePaused()
 }
 

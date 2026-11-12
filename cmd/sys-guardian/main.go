@@ -218,15 +218,15 @@ func guardConfig(cfg config.Config) guard.Config {
 	}
 }
 
-func notifier(cfg config.Config) func(title, body string) {
-	return func(title, body string) {
+func notifier(cfg config.Config) func(title, sub, body string) {
+	return func(title, sub, body string) {
 		if !cfg.Notify || cfg.Mode == config.ModeObserve {
 			return
 		}
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), notifyTTL)
 			defer cancel()
-			if err := notify.Send(ctx, title, body); err != nil {
+			if err := notify.Send(ctx, title, sub, body); err != nil {
 				slog.Warn("notification failed", "err", err)
 			}
 		}()

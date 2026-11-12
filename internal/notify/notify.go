@@ -10,13 +10,17 @@ import (
 
 const osascript = "/usr/bin/osascript"
 
-var escaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", " ", "\r", " ")
+// Newlines are re-emitted as the AppleScript \n escape so multi-line bodies
+// keep their structure; anything else that would break the literal is
+// escaped or stripped.
+var escaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", "")
 
 // Send posts a notification. Launchd agents have a minimal PATH, so the
 // osascript path is absolute.
-func Send(ctx context.Context, title, body string) error {
+func Send(ctx context.Context, title, sub, body string) error {
 	script := `display notification "` + escaper.Replace(body) +
-		`" with title "` + escaper.Replace(title) + `"`
+		`" with title "` + escaper.Replace(title) +
+		`" subtitle "` + escaper.Replace(sub) + `"`
 	//nolint:gosec // G204: fixed binary, operator-owned strings
 	if err := exec.CommandContext(ctx, osascript, "-e", script).Run(); err != nil {
 		return fmt.Errorf("osascript: %w", err)
