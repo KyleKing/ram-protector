@@ -59,7 +59,7 @@ const (
 // line. Disposable processes are safe to stop: they respawn or lose nothing.
 var (
 	builtinNever = []string{
-		"sys-guardian", "sys-guardian", "launchd", "kernel_task", "windowserver", "loginwindow",
+		"sys-guardian", "ram-protector", "launchd", "kernel_task", "windowserver", "loginwindow",
 		"cfprefsd", "distnoted", "usernoted", "opendirectoryd", "diskarbitrationd",
 		"notifyd", "powerd", "systemstats",
 		// A stopped VM frees nothing and trips Docker's watchdog — pause is a

@@ -9,8 +9,6 @@ type Status struct {
 	// SwapUsed and SwapTotal are bytes of swap.
 	SwapUsed  uint64
 	SwapTotal uint64
-	// PhysTotal is installed physical memory in bytes.
-	PhysTotal uint64
 	// Load1, Load5, Load15 are the system load averages (runnable threads).
 	Load1  float64
 	Load5  float64

@@ -68,7 +68,8 @@
 - **System load trigger.** A single runaway trips `cpu_burn`, but a
   distributed storm — N workers at ~25% each — never does. When load1 per
   core sustains over `load_per_core` for `load_for`, the deepest eligible
-  node whose tree burns at least a core is paused once per tick — a storm
+  node whose tree burns at least a core is paused once per tick
+  (capped at 8 frozen trees) — a storm
   spawned by one process is frozen at the spawner, not picked off worker by
   worker, and a storm where every tree burns under a core is left to end on
   its own;

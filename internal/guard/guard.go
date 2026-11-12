@@ -3,6 +3,7 @@
 package guard
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -25,8 +26,6 @@ import (
 
 const (
 	topN           = 5
-	kindAction     = "action"
-	kindDecision   = "decision"
 	verbStop       = "stop"
 	verbWouldStop  = "would_stop"
 	dirPerm        = 0o750
@@ -403,7 +402,7 @@ func (g *Guard) escalate(now time.Time, procs []proc.Proc, low, growing bool) {
 			h.termAt = now
 			g.signalTree(h, syscall.SIGTERM, "term")
 			g.journal.Log(journal.Event{
-				Time: now, Kind: kindAction, Action: "term",
+				Time: now, Kind: journal.KindAction, Action: "term",
 				PID: pid, Name: h.name, RSS: h.rss, Msg: h.detail(reason, now),
 			})
 
@@ -413,7 +412,7 @@ func (g *Guard) escalate(now time.Time, procs []proc.Proc, low, growing bool) {
 			g.signalTree(h, syscall.SIGKILL, "kill")
 			detail := h.detail(reason, now)
 			g.journal.Log(journal.Event{
-				Time: now, Kind: kindAction, Action: "kill",
+				Time: now, Kind: journal.KindAction, Action: "kill",
 				PID: pid, Name: h.name, RSS: h.rss, Msg: detail,
 			})
 			g.alert("sys-guardian", fmt.Sprintf("killed %s (%s)\n%s",
@@ -468,7 +467,7 @@ func (g *Guard) dryVerb() (string, bool) {
 func (g *Guard) maybePause(st mem.Status, procs []proc.Proc, now time.Time, spikeNow bool) {
 	victim, top := g.pickVictim(st, procs)
 	verb, dry := g.dryVerb()
-	ev := journal.Event{Time: now, Kind: kindDecision, Level: st.Level, Dry: dry, Top: top}
+	ev := journal.Event{Time: now, Kind: journal.KindDecision, Level: st.Level, Dry: dry, Top: top}
 	if spikeNow && st.Level >= g.cfg.WarnLevel {
 		ev.Msg = "trigger=swap_spike"
 	}
@@ -503,7 +502,7 @@ func (g *Guard) maybePauseHog(st mem.Status, procs []proc.Proc, now time.Time) b
 	}
 	verb, dry := g.dryVerb()
 	g.journal.Log(journal.Event{
-		Time: now, Kind: kindDecision, Level: st.Level, Dry: dry, Top: top,
+		Time: now, Kind: journal.KindDecision, Level: st.Level, Dry: dry, Top: top,
 		Action: verb, PID: victim.p.PID, Name: victim.p.Name, RSS: victim.p.RSS,
 		Msg: "trigger=hog_ceiling",
 	})
@@ -531,7 +530,7 @@ func (g *Guard) maybePauseBurn(st mem.Status, procs []proc.Proc, now time.Time) 
 	verb, dry := g.dryVerb()
 	cpu, _ := g.scorer.RecentCPU(victim.p, now)
 	g.journal.Log(journal.Event{
-		Time: now, Kind: kindDecision, Level: st.Level, Dry: dry, Top: top,
+		Time: now, Kind: journal.KindDecision, Level: st.Level, Dry: dry, Top: top,
 		Action: verb, PID: victim.p.PID, Name: victim.p.Name, RSS: victim.p.RSS,
 		Msg: fmt.Sprintf("trigger=cpu_burn cpu=%d%%", int(cpu)),
 	})
@@ -556,7 +555,7 @@ func (g *Guard) maybePauseLoad(st mem.Status, procs []proc.Proc, now time.Time) 
 	}
 	verb, dry := g.dryVerb()
 	g.journal.Log(journal.Event{
-		Time: now, Kind: kindDecision, Level: st.Level, Dry: dry, Top: top,
+		Time: now, Kind: journal.KindDecision, Level: st.Level, Dry: dry, Top: top,
 		Action: verb, PID: victim.p.PID, Name: victim.p.Name, RSS: victim.p.RSS,
 		Msg: fmt.Sprintf("trigger=system_load cpu=%d%%", int(victim.score)),
 	})
@@ -673,8 +672,7 @@ func (g *Guard) pickVictim(st mem.Status, procs []proc.Proc) (*scored, []journal
 	cands := make([]scored, 0, len(procs))
 	now := g.now()
 	for _, p := range procs {
-		if heldSet[p.PID] || g.blocked[p.PID] || !g.killed[keyOf(p)].IsZero() ||
-			p.RSS < g.cfg.MemFloorBytes {
+		if !g.baseEligible(heldSet, p) || p.RSS < g.cfg.MemFloorBytes {
 			continue
 		}
 		s, reasons := g.scorer.Score(p, now)
@@ -685,7 +683,7 @@ func (g *Guard) pickVictim(st mem.Status, procs []proc.Proc) (*scored, []journal
 		cands = append(cands, scored{p: p, score: s, reasons: reasons})
 	}
 	slices.SortFunc(cands, func(a, b scored) int {
-		return cmpFloat(b.score, a.score)
+		return cmp.Compare(b.score, a.score)
 	})
 
 	top := topCandidates(cands)
@@ -704,8 +702,8 @@ func (g *Guard) pickDisposable(procs []proc.Proc, now time.Time,
 	heldSet := g.heldPIDs()
 	cands := make([]scored, 0, len(procs))
 	for _, p := range procs {
-		if heldSet[p.PID] || g.blocked[p.PID] || !g.killed[keyOf(p)].IsZero() ||
-			p.RSS < g.cfg.MemFloorBytes || !eligible(p) {
+		if !g.baseEligible(heldSet, p) || p.RSS < g.cfg.MemFloorBytes ||
+			!eligible(p) {
 			continue
 		}
 		if g.scorer.TierOf(p) != score.TierDisposable {
@@ -718,7 +716,7 @@ func (g *Guard) pickDisposable(procs []proc.Proc, now time.Time,
 		cands = append(cands, scored{p: p, score: s, reasons: reasons})
 	}
 	slices.SortFunc(cands, func(a, b scored) int {
-		return cmpFloat(b.score, a.score)
+		return cmp.Compare(b.score, a.score)
 	})
 
 	top := topCandidates(cands)
@@ -749,7 +747,7 @@ func (g *Guard) pickByCPU(procs []proc.Proc, now time.Time) (*scored, []journal.
 		}
 	}
 	slices.SortFunc(cands, func(a, b scored) int {
-		return cmpFloat(b.score, a.score)
+		return cmp.Compare(b.score, a.score)
 	})
 
 	top := topCandidates(cands)
@@ -761,10 +759,16 @@ func (g *Guard) pickByCPU(procs []proc.Proc, now time.Time) (*scored, []journal.
 	return &victim, top
 }
 
-// stormEligible reports whether p can be a storm victim: unheld, signalable,
-// out of the kill cooldown, and disposable or neutral tier.
+// baseEligible holds the exclusions every victim pick shares: already held,
+// unsignalable, or inside the kill cooldown.
+func (g *Guard) baseEligible(heldSet map[int32]bool, p proc.Proc) bool {
+	return !heldSet[p.PID] && !g.blocked[p.PID] && g.killed[keyOf(p)].IsZero()
+}
+
+// stormEligible adds the tier gate for load victims: only disposable or
+// neutral processes may be paused for a system storm.
 func (g *Guard) stormEligible(heldSet map[int32]bool, p proc.Proc) bool {
-	if heldSet[p.PID] || g.blocked[p.PID] || !g.killed[keyOf(p)].IsZero() {
+	if !g.baseEligible(heldSet, p) {
 		return false
 	}
 	tier := g.scorer.TierOf(p)
@@ -835,7 +839,10 @@ func stormScored(p proc.Proc, cpu float64) scored {
 // unkillable for the rest of the run.
 func (g *Guard) signal(pid int32, sig syscall.Signal, act, name string) {
 	if g.cfg.Mode == config.ModeObserve {
-		g.journal.Log(journal.Event{Time: g.now(), Kind: kindAction, Action: act, PID: pid, Name: name, Dry: true})
+		g.journal.Log(journal.Event{
+			Time: g.now(), Kind: journal.KindAction, Action: act,
+			PID: pid, Name: name, Dry: true,
+		})
 
 		return
 	}
@@ -845,14 +852,14 @@ func (g *Guard) signal(pid int32, sig syscall.Signal, act, name string) {
 		}
 		if !errors.Is(err, syscall.ESRCH) {
 			g.journal.Log(journal.Event{
-				Time: g.now(), Kind: kindAction, Action: act,
+				Time: g.now(), Kind: journal.KindAction, Action: act,
 				PID: pid, Name: name, Msg: err.Error(),
 			})
 		}
 
 		return
 	}
-	g.journal.Log(journal.Event{Time: g.now(), Kind: kindAction, Action: act, PID: pid, Name: name})
+	g.journal.Log(journal.Event{Time: g.now(), Kind: journal.KindAction, Action: act, PID: pid, Name: name})
 }
 
 // signalTree stops parent-first so it cannot fork during the walk, but terms
@@ -889,7 +896,7 @@ func (g *Guard) resumeAll(keep map[int32]bool) {
 		return
 	}
 	g.healthy = 0
-	g.journal.Log(journal.Event{Time: g.now(), Kind: "resume", Msg: strings.Join(names, ", ")})
+	g.journal.Log(journal.Event{Time: g.now(), Kind: journal.KindResume, Msg: strings.Join(names, ", ")})
 	g.notify("sys-guardian", fmt.Sprintf("resumed %d", len(names)), strings.Join(names, ", "))
 	g.savePaused()
 }
@@ -913,7 +920,7 @@ func (g *Guard) dropDead(procs []proc.Proc) {
 		}
 		if !someAlive {
 			g.journal.Log(journal.Event{
-				Time: g.now(), Kind: kindAction, Action: "exited",
+				Time: g.now(), Kind: journal.KindAction, Action: "exited",
 				PID: pid, Name: h.name,
 			})
 			delete(g.held, pid)
@@ -926,7 +933,7 @@ func (g *Guard) dropDead(procs []proc.Proc) {
 func (g *Guard) journalSnapshot(st mem.Status, procs []proc.Proc, now time.Time, swapDelta uint64) {
 	sorted := slices.Clone(procs)
 	slices.SortFunc(sorted, func(a, b proc.Proc) int {
-		return cmpUint64(b.RSS, a.RSS)
+		return cmp.Compare(b.RSS, a.RSS)
 	})
 	top := make([]journal.Candidate, 0, topN)
 	for i, p := range sorted {
@@ -936,7 +943,7 @@ func (g *Guard) journalSnapshot(st mem.Status, procs []proc.Proc, now time.Time,
 		top = append(top, journal.Candidate{PID: p.PID, Name: p.Name, RSS: p.RSS})
 	}
 	g.journal.Log(journal.Event{
-		Time: now, Kind: "snapshot", Level: st.Level,
+		Time: now, Kind: journal.KindSnapshot, Level: st.Level,
 		Load1: st.Load1, Load5: st.Load5, Load15: st.Load15,
 		Top: top, TopCPU: g.topCPU(procs, now),
 		SwapDelta: swapDelta, Msg: "swap=" + gib(st.SwapUsed),
@@ -955,7 +962,7 @@ func (g *Guard) topCPU(procs []proc.Proc, now time.Time) []journal.Candidate {
 		cpus = append(cpus, journal.Candidate{PID: p.PID, Name: p.Name, RSS: p.RSS, CPU: cpu})
 	}
 	slices.SortFunc(cpus, func(a, b journal.Candidate) int {
-		return cmpFloat(b.CPU, a.CPU)
+		return cmp.Compare(b.CPU, a.CPU)
 	})
 	if len(cpus) > topN {
 		cpus = cpus[:topN]
@@ -1042,26 +1049,4 @@ func treeOf(root int32, procs []proc.Proc) []int32 {
 
 func gib(b uint64) string {
 	return fmt.Sprintf("%.1f GB", float64(b)/float64(uint64(1)<<gibShift))
-}
-
-func cmpFloat(a, b float64) int {
-	switch {
-	case a < b:
-		return -1
-	case a > b:
-		return 1
-	default:
-		return 0
-	}
-}
-
-func cmpUint64(a, b uint64) int {
-	switch {
-	case a < b:
-		return -1
-	case a > b:
-		return 1
-	default:
-		return 0
-	}
 }

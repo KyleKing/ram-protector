@@ -16,10 +16,6 @@ func Read() (Status, error) {
 	if err != nil {
 		return Status{}, fmt.Errorf("reading kern.memorystatus_level: %w", err)
 	}
-	vmem, err := gopsmem.VirtualMemory()
-	if err != nil {
-		return Status{}, fmt.Errorf("reading virtual memory: %w", err)
-	}
 	swap, err := gopsmem.SwapMemory()
 	if err != nil {
 		return Status{}, fmt.Errorf("reading swap usage: %w", err)
@@ -33,7 +29,6 @@ func Read() (Status, error) {
 		Level:     int(level),
 		SwapUsed:  swap.Used,
 		SwapTotal: swap.Total,
-		PhysTotal: vmem.Total,
 		Load1:     avg.Load1,
 		Load5:     avg.Load5,
 		Load15:    avg.Load15,

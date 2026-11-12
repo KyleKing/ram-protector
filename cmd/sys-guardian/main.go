@@ -11,8 +11,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"slices"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -25,6 +23,7 @@ import (
 	"github.com/kyleking/sys-guardian/internal/mem"
 	"github.com/kyleking/sys-guardian/internal/notify"
 	"github.com/kyleking/sys-guardian/internal/proc"
+	"github.com/kyleking/sys-guardian/internal/report"
 	"github.com/kyleking/sys-guardian/internal/score"
 	"github.com/kyleking/sys-guardian/internal/service"
 )
@@ -37,10 +36,7 @@ var (
 
 const (
 	defaultTail = 20
-	mbShift     = 20
-	bytesPerGiB = 1 << 30
 	notifyTTL   = 10 * time.Second
-	showTop     = 10
 )
 
 var (
@@ -114,11 +110,11 @@ func run(args []string) error {
 
 	switch cmd {
 	case "check":
-		return printCheck(cfg)
+		err = report.Check(cfg)
 	case "status":
-		return printStatus(eventsPath, *tail)
+		err = report.Status(eventsPath, *tail)
 	case "log":
-		return printLog(eventsPath, *tail)
+		err = report.Log(eventsPath, *tail)
 	case "install":
 		return doInstall(cfg)
 	case "uninstall":
@@ -129,6 +125,19 @@ func run(args []string) error {
 		printHelp()
 		return fmt.Errorf("%w %q", errUsage, cmd)
 	}
+	if err != nil {
+		return fmt.Errorf("%s: %w", cmd, err)
+	}
+
+	return nil
+}
+
+func wrapRun(err error) error {
+	if err != nil {
+		return fmt.Errorf("guard: %w", err)
+	}
+
+	return nil
 }
 
 func runDaemon(cfg config.Config, eventsPath string) error {
@@ -175,22 +184,6 @@ func doUninstall() error {
 	return nil
 }
 
-func mbBytes(n int) uint64 {
-	if n < 0 {
-		n = 0
-	}
-
-	return uint64(n) << mbShift
-}
-
-func wrapRun(err error) error {
-	if err != nil {
-		return fmt.Errorf("daemon: %w", err)
-	}
-
-	return nil
-}
-
 func guardConfig(cfg config.Config) guard.Config {
 	return guard.Config{
 		Mode:              cfg.Mode,
@@ -200,10 +193,10 @@ func guardConfig(cfg config.Config) guard.Config {
 		ResumeTicks:       cfg.ResumeTicks,
 		TermAfter:         cfg.TermAfter.Duration,
 		KillAfter:         cfg.KillAfter.Duration,
-		MemFloorBytes:     mbBytes(cfg.MemFloorMB),
-		HogBytes:          mbBytes(cfg.HogMB),
-		SwapSpikeBytes:    mbBytes(cfg.SwapSpikeMB),
-		SwapGrowthBytes:   mbBytes(cfg.SwapGrowthMB),
+		MemFloorBytes:     cfg.MemFloorBytes(),
+		HogBytes:          cfg.HogBytes(),
+		SwapSpikeBytes:    cfg.SwapSpikeBytes(),
+		SwapGrowthBytes:   cfg.SwapGrowthBytes(),
 		SpikeHold:         cfg.SpikeHold.Duration,
 		MinPause:          cfg.MinPause.Duration,
 		CPUBurnPct:        float64(cfg.CPUBurnPct),
@@ -252,115 +245,6 @@ func alerter(cfg config.Config) func(title, body string) {
 				slog.Warn("alert failed", "err", err)
 			}
 		}()
-	}
-}
-
-type ranked struct {
-	r []string
-	p proc.Proc
-	s float64
-}
-
-func printCheck(cfg config.Config) error {
-	st, err := mem.Read()
-	if err != nil {
-		return fmt.Errorf("reading memory: %w", err)
-	}
-	procs, err := proc.List()
-	if err != nil {
-		return fmt.Errorf("listing processes: %w", err)
-	}
-	sc := score.New(cfg.Disposable, cfg.LastResort, cfg.Never,
-		score.WithStableAge(cfg.StableAge.Duration))
-	now := time.Now()
-
-	rows := make([]ranked, 0, showTop)
-	for _, p := range procs {
-		s, reasons := sc.Score(p, now)
-		if s <= 0 || p.RSS < mbBytes(cfg.MemFloorMB) {
-			continue
-		}
-		rows = append(rows, ranked{p: p, s: s, r: reasons})
-	}
-	slices.SortFunc(rows, func(a, b ranked) int { return cmpFloat(b.s, a.s) })
-
-	fmt.Printf("memory available: %d%%   swap: %.1f/%.1f GB   warn<%d crit<%d hog>%dGB\n",
-		st.Level, float64(st.SwapUsed)/bytesPerGiB, float64(st.SwapTotal)/bytesPerGiB,
-		cfg.WarnLevel, cfg.CriticalLevel, mbBytes(cfg.HogMB)/bytesPerGiB)
-	fmt.Println("top victims by score:")
-	for i, rw := range rows {
-		if i >= showTop {
-			break
-		}
-		fmt.Printf("  %6.2f  %-24s pid=%-6d rss=%.1fGB  %s\n",
-			rw.s, rw.p.Name, rw.p.PID, float64(rw.p.RSS)/bytesPerGiB, strings.Join(rw.r, " "))
-	}
-
-	return nil
-}
-
-func printLog(path string, n int) error {
-	events, err := journal.Tail(path, n)
-	if errors.Is(err, os.ErrNotExist) {
-		fmt.Println("no journal yet at " + path)
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("reading journal: %w", err)
-	}
-	for i := range events {
-		fmt.Println(formatEvent(events[i]))
-	}
-
-	return nil
-}
-
-func printStatus(path string, n int) error {
-	st, err := mem.Read()
-	if err != nil {
-		return fmt.Errorf("reading memory: %w", err)
-	}
-	fmt.Printf("memory available: %d%%   swap: %.1f/%.1f GB   agent running: %v\n",
-		st.Level, float64(st.SwapUsed)/bytesPerGiB, float64(st.SwapTotal)/bytesPerGiB,
-		service.Running(context.Background()))
-
-	return printLog(path, n)
-}
-
-func formatEvent(e journal.Event) string {
-	ts := e.Time.Format("15:04:05")
-	dry := ""
-	if e.Dry {
-		dry = " [dry]"
-	}
-	switch e.Kind {
-	case "decision", "action":
-		return fmt.Sprintf("%s %-8s %-12s pid=%-6d %-20s lvl=%d%%%s %s",
-			ts, e.Kind, e.Action, e.PID, e.Name, e.Level, dry, e.Msg)
-	case "resume":
-		return fmt.Sprintf("%s %-8s %s%s", ts, e.Kind, e.Msg, dry)
-	default:
-		dswap := ""
-		if e.SwapDelta > 0 {
-			dswap = fmt.Sprintf(" dswap=+%.1fGB", float64(e.SwapDelta)/bytesPerGiB)
-		}
-		load := ""
-		if e.Load1 > 0 {
-			load = fmt.Sprintf(" load1=%.1f", e.Load1)
-		}
-
-		return fmt.Sprintf("%s %-8s lvl=%d%%%s %s%s%s", ts, e.Kind, e.Level, load, e.Msg, dswap, dry)
-	}
-}
-
-func cmpFloat(a, b float64) int {
-	switch {
-	case a < b:
-		return -1
-	case a > b:
-		return 1
-	default:
-		return 0
 	}
 }
 

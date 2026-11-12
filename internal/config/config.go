@@ -145,6 +145,28 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// MemFloorBytes is mem_floor_mb in bytes.
+func (c Config) MemFloorBytes() uint64 { return mbToBytes(c.MemFloorMB) }
+
+// HogBytes is hog_mb in bytes.
+func (c Config) HogBytes() uint64 { return mbToBytes(c.HogMB) }
+
+// SwapSpikeBytes is swap_spike_mb in bytes.
+func (c Config) SwapSpikeBytes() uint64 { return mbToBytes(c.SwapSpikeMB) }
+
+// SwapGrowthBytes is swap_growth_mb in bytes.
+func (c Config) SwapGrowthBytes() uint64 { return mbToBytes(c.SwapGrowthMB) }
+
+const mbShift = 20
+
+func mbToBytes(n int) uint64 {
+	if n < 0 {
+		n = 0
+	}
+
+	return uint64(n) << mbShift
+}
+
 // Validate checks the invariants the guard relies on.
 func (c Config) Validate() error {
 	if c.Mode != ModeObserve && c.Mode != ModeProtect {
