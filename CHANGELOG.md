@@ -1,3 +1,13 @@
+## v1.5.0 (2026-11-12)
+
+### Feat
+
+- roll oversized journal aside to events.jsonl.old on open
+
+### Refactor
+
+- extract internal/report and trim dead surface
+
 ## v1.4.0 (2026-11-12)
 
 ### Feat
