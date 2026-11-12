@@ -270,9 +270,13 @@ func (g *Guard) swapSignals(swapDelta uint64, now time.Time) (bool, bool) {
 	return spikeNow, growing
 }
 
-// minVictimCPU keeps the load trigger from pausing noise: below this %CPU a
-// process contributes too little to a storm to be worth freezing.
-const minVictimCPU = 10.0
+// minStormCPU keeps the load trigger from pausing noise: a victim tree must
+// burn at least a core for a stop to relieve anything.
+const minStormCPU = 100.0
+
+// descendShare descends the victim to the deepest node still owning this
+// share of the burn — the spawn point, not the shell above it.
+const descendShare = 0.5
 
 // resumeRatio places the default load-resume threshold at half the trigger,
 // leaving a hysteresis band between storming and calm.
@@ -544,14 +548,13 @@ func (g *Guard) maybePauseLoad(st mem.Status, procs []proc.Proc, now time.Time) 
 		return false
 	}
 	verb, dry := g.dryVerb()
-	cpu, _ := g.scorer.RecentCPU(victim.p, now)
 	g.journal.Log(journal.Event{
 		Time: now, Kind: kindDecision, Level: st.Level, Dry: dry, Top: top,
 		Action: verb, PID: victim.p.PID, Name: victim.p.Name, RSS: victim.p.RSS,
-		Msg: fmt.Sprintf("trigger=system_load cpu=%d%%", int(cpu)),
+		Msg: fmt.Sprintf("trigger=system_load cpu=%d%%", int(victim.score)),
 	})
-	msg := fmt.Sprintf("paused %s — load storm, burning %.0f%% CPU.",
-		victim.p.Name, cpu)
+	msg := fmt.Sprintf("paused %s — load storm, its tree burning %.0f%% CPU.",
+		victim.p.Name, victim.score)
 	g.pauseTree(victim, procs, now, false, msg)
 
 	return true
@@ -709,26 +712,24 @@ func (g *Guard) pickDisposable(procs []proc.Proc, now time.Time,
 	return &cands[0], top
 }
 
-// pickByCPU ranks disposable and neutral processes by recent CPU burn for the
-// load trigger; interactive tiers stay protected even mid-storm.
+// pickByCPU scores each candidate by the CPU burned across its whole tree and
+// returns the deepest node still owning most of that burn (the spawn point).
 func (g *Guard) pickByCPU(procs []proc.Proc, now time.Time) (*scored, []journal.Candidate) {
 	heldSet := g.heldPIDs()
+	eligible := func(p proc.Proc) bool {
+		return g.stormEligible(heldSet, p)
+	}
+	byPID := make(map[int32]proc.Proc, len(procs))
+	for _, p := range procs {
+		byPID[p.PID] = p
+	}
+	stormCPU := g.stormCPUs(procs, byPID, eligible, now)
+
 	cands := make([]scored, 0, len(procs))
 	for _, p := range procs {
-		if heldSet[p.PID] || g.blocked[p.PID] || !g.killed[keyOf(p)].IsZero() {
-			continue
+		if eligible(p) && stormCPU[p.PID] >= minStormCPU {
+			cands = append(cands, stormScored(p, stormCPU[p.PID]))
 		}
-		if tier := g.scorer.TierOf(p); tier != score.TierDisposable && tier != score.TierNeutral {
-			continue
-		}
-		cpu, ok := g.scorer.RecentCPU(p, now)
-		if !ok || cpu < minVictimCPU {
-			continue
-		}
-		cands = append(cands, scored{
-			p: p, score: cpu,
-			reasons: []string{fmt.Sprintf("cpu=%d%%", int(cpu))},
-		})
 	}
 	slices.SortFunc(cands, func(a, b scored) int {
 		return cmpFloat(b.score, a.score)
@@ -738,8 +739,79 @@ func (g *Guard) pickByCPU(procs []proc.Proc, now time.Time) (*scored, []journal.
 	if len(cands) == 0 {
 		return nil, top
 	}
+	victim := descendStorm(procs, stormCPU, eligible, cands[0].p)
 
-	return &cands[0], top
+	return &victim, top
+}
+
+// stormEligible reports whether p can be a storm victim: unheld, signalable,
+// out of the kill cooldown, and disposable or neutral tier.
+func (g *Guard) stormEligible(heldSet map[int32]bool, p proc.Proc) bool {
+	if heldSet[p.PID] || g.blocked[p.PID] || !g.killed[keyOf(p)].IsZero() {
+		return false
+	}
+	tier := g.scorer.TierOf(p)
+
+	return tier == score.TierDisposable || tier == score.TierNeutral
+}
+
+// stormCPUs credits each eligible process's burn up its ancestor chain while
+// every node on the path stays eligible — an ineligible parent is a boundary.
+func (g *Guard) stormCPUs(procs []proc.Proc, byPID map[int32]proc.Proc,
+	eligible func(proc.Proc) bool, now time.Time,
+) map[int32]float64 {
+	stormCPU := make(map[int32]float64, len(procs))
+	for _, p := range procs {
+		cpu, _ := g.scorer.RecentCPU(p, now)
+		stormCPU[p.PID] += cpu
+		if !eligible(p) {
+			continue
+		}
+		pp := p.PPID
+		for range procs {
+			a, ok := byPID[pp]
+			if !ok || !eligible(a) {
+				break
+			}
+			stormCPU[pp] += cpu
+			pp = a.PPID
+		}
+	}
+
+	return stormCPU
+}
+
+// descendStorm walks down from start while one eligible child still owns
+// descendShare of the tree's burn, landing on the storm's spawn point.
+func descendStorm(procs []proc.Proc, stormCPU map[int32]float64,
+	eligible func(proc.Proc) bool, start proc.Proc,
+) scored {
+	victim := start
+	for range procs {
+		next := -1
+		for i, p := range procs {
+			if p.PPID != victim.PID || !eligible(p) ||
+				stormCPU[p.PID] < descendShare*stormCPU[victim.PID] {
+				continue
+			}
+			if next < 0 || stormCPU[p.PID] > stormCPU[procs[next].PID] {
+				next = i
+			}
+		}
+		if next < 0 {
+			break
+		}
+		victim = procs[next]
+	}
+
+	return stormScored(victim, stormCPU[victim.PID])
+}
+
+func stormScored(p proc.Proc, cpu float64) scored {
+	return scored{
+		p: p, score: cpu,
+		reasons: []string{fmt.Sprintf("tree_cpu=%d%%", int(cpu))},
+	}
 }
 
 // signal sends sig, or only records it in observe mode. EPERM marks the PID

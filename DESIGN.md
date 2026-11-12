@@ -67,8 +67,11 @@
   duration again before it is re-paused.
 - **System load trigger.** A single runaway trips `cpu_burn`, but a
   distributed storm — N workers at ~25% each — never does. When load1 per
-  core sustains over `load_per_core` for `load_for`, the biggest CPU
-  consumer in the disposable or neutral tier is paused once per tick;
+  core sustains over `load_per_core` for `load_for`, the deepest eligible
+  node whose tree burns at least a core is paused once per tick — a storm
+  spawned by one process is frozen at the spawner, not picked off worker by
+  worker, and a storm where every tree burns under a core is left to end on
+  its own;
   SIGSTOP alone relieves it, so no escalation ladder runs. The storm keeps
   counting as pressure (blocking resume) until load1 per core drops under
   `load_resume_per_core`. `kern.memorystatus_level` stayed at 40–75%

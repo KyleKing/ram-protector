@@ -363,6 +363,44 @@ func TestLoad_ResumesWhenLoadClears(t *testing.T) {
 	}
 }
 
+func TestLoad_PausesStormSpawnPoint(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	h := newHarnessCfg(t, []proc.Proc{
+		{PID: 90, PPID: 1, Name: "zsh", Cmdline: "zsh", RSS: 50 << 20, Created: now},
+		{PID: 400, PPID: 90, Name: "python3.12", Cmdline: "python -u -c bot", RSS: 200 << 20, Created: now},
+		{PID: 401, PPID: 400, Name: "git", Cmdline: "git grep x", RSS: 100 << 20, Created: now},
+		{PID: 402, PPID: 400, Name: "git", Cmdline: "git grep y", RSS: 100 << 20, Created: now},
+		{PID: 403, PPID: 400, Name: "git", Cmdline: "git grep z", RSS: 100 << 20, Created: now},
+		{PID: 500, PPID: 1, Name: "node", Cmdline: "npm exec mcp", RSS: 150 << 20, Created: now},
+	}, 70, func(c *guard.Config) {
+		c.LoadPerCore = 1.5
+		c.LoadResumePerCore = 0.8
+		c.LoadFor = time.Minute
+		c.NumCores = 10
+	})
+	h.sys.load1 = 30
+	h.guard.Tick()
+	feed := func() {
+		feedCPU(h, map[int32]float64{401: 20, 402: 20, 403: 20, 500: 4})
+		h.guard.Tick()
+	}
+	feed() // 30s sustained: under LoadFor
+	if len(h.sys.calls) != 0 {
+		t.Fatalf("stopped during the burn-in window: %+v", h.sys.calls)
+	}
+	feed() // 60s sustained: storm is active
+	if !hasCall(h.sys.calls, syscall.SIGSTOP, 400) {
+		t.Fatalf("storm spawner not stopped: %+v", h.sys.calls)
+	}
+	if hasCall(h.sys.calls, syscall.SIGSTOP, 90) {
+		t.Error("shell above the spawner was stopped; the victim must be the deepest spawn point")
+	}
+	if hasCall(h.sys.calls, syscall.SIGSTOP, 500) {
+		t.Error("bystander under the storm floor was stopped")
+	}
+}
+
 func TestLoad_BurstDoesNotTrigger(t *testing.T) {
 	t.Parallel()
 	h := loadHarness(t)
