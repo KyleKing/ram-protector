@@ -53,6 +53,9 @@ type Event struct {
 const (
 	dirPerm  = 0o750
 	filePerm = 0o600
+	// Past this size the journal rolls to <name>.old on open, so a busy year
+	// cannot fill the disk and Tail stays cheap.
+	maxJournalBytes = 64 << 20
 )
 
 // Writer appends events to a single JSONL file.
@@ -61,10 +64,16 @@ type Writer struct {
 	mu sync.Mutex
 }
 
-// New opens path for appending, creating parent directories.
+// New opens path for appending, creating parent directories and rolling an
+// oversized journal aside to <name>.old.
 func New(path string) (*Writer, error) {
 	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
 		return nil, fmt.Errorf("creating journal dir: %w", err)
+	}
+	if fi, err := os.Stat(path); err == nil && fi.Size() > maxJournalBytes {
+		if err := os.Rename(path, path+".old"); err != nil {
+			return nil, fmt.Errorf("rotating journal %s: %w", path, err)
+		}
 	}
 	//nolint:gosec // G304: path is the operator-owned log file
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, filePerm)
